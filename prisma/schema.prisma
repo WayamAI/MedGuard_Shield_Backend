@@ -1,0 +1,149 @@
+// MedGuard — PHI risk-intelligence data model (demo scope).
+//
+// Deliberately minimal: no multi-tenancy, no vendor module. Every asset
+// belongs to the single demo organisation, so there is no orgId anywhere.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// Prisma 7 takes the connection URL from prisma.config.ts (migrations) and
+// from the driver adapter in src/lib/prisma.ts (runtime), not from here.
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------- enums
+
+enum Role {
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+enum AssetType {
+  EHR
+  DATABASE
+  API
+  CLOUD_STORAGE
+  ANALYTICS
+  OTHER
+}
+
+enum Sensitivity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum RiskBand {
+  LOW
+  MODERATE
+  HIGH
+  CRITICAL
+  EXTREME
+}
+
+// ---------------------------------------------------------------- models
+
+/// Authentication is deferred to a later phase, so both credential columns are
+/// optional: a seeded demo user may carry neither. When auth lands, exactly one
+/// of passwordHash (local) or externalAuthId (Supabase/Clerk) gets populated.
+model User {
+  id             Int      @id @default(autoincrement())
+  email          String   @unique
+  passwordHash   String?
+  externalAuthId String?  @unique
+  role           Role     @default(VIEWER)
+  createdAt      DateTime @default(now())
+
+  @@index([role])
+}
+
+/// A system that stores or processes PHI. The four control columns
+/// (phiVolume, encrypted, mfaEnabled, lastAssessedAt) are what the risk
+/// inputs are argued from during an assessment.
+model Asset {
+  id             Int       @id @default(autoincrement())
+  name           String    @unique
+  type           AssetType
+  phiVolume      Int       @default(0)
+  encrypted      Boolean   @default(false)
+  mfaEnabled     Boolean   @default(false)
+  lastAssessedAt DateTime?
+  createdAt      DateTime  @default(now())
+
+  phiTypes      AssetPHI[]
+  outboundFlows DataFlow[] @relation("FlowSource")
+  inboundFlows  DataFlow[] @relation("FlowTarget")
+  risks         Risk[]
+
+  @@index([type])
+}
+
+/// A category of protected health information, e.g. Clinical or Genetic.
+model PHIType {
+  id          Int         @id @default(autoincrement())
+  name        String      @unique
+  sensitivity Sensitivity
+
+  links  AssetPHI[]
+  flows  DataFlow[]
+
+  @@index([sensitivity])
+}
+
+/// Which PHI categories live in which asset, and at what daily volume.
+model AssetPHI {
+  assetId       Int
+  phiTypeId     Int
+  recordsPerDay Int @default(0)
+
+  asset   Asset   @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  phiType PHIType @relation(fields: [phiTypeId], references: [id], onDelete: Cascade)
+
+  @@id([assetId, phiTypeId])
+  @@index([phiTypeId])
+}
+
+/// A directed movement of PHI between two assets. Drives the Sankey:
+/// recordsPerDay sets ribbon width, encrypted sets ribbon tone.
+model DataFlow {
+  id            Int     @id @default(autoincrement())
+  sourceAssetId Int
+  targetAssetId Int
+  phiTypeId     Int
+  recordsPerDay Int
+  encrypted     Boolean @default(true)
+
+  sourceAsset Asset   @relation("FlowSource", fields: [sourceAssetId], references: [id], onDelete: Cascade)
+  targetAsset Asset   @relation("FlowTarget", fields: [targetAssetId], references: [id], onDelete: Cascade)
+  phiType     PHIType @relation(fields: [phiTypeId], references: [id], onDelete: Restrict)
+
+  @@index([sourceAssetId])
+  @@index([targetAssetId])
+  @@index([phiTypeId])
+}
+
+/// A scored risk for one asset. The four 1-5 inputs are the assessor's
+/// judgement; score and band are derived by src/services/riskEngine.ts and
+/// must never be written by hand.
+model Risk {
+  id          Int      @id @default(autoincrement())
+  assetId     Int
+  likelihood  Int
+  impact      Int
+  exposure    Int
+  controlGap  Int
+  score       Float
+  band        RiskBand
+  computedAt  DateTime @default(now())
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([assetId])
+  @@index([band])
+  @@index([computedAt])
+}
