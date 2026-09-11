@@ -1,0 +1,202 @@
+# MedGuard — Demo Runbook
+
+Go/no-go procedure for running the MedGuard demo. Follow it in order from a cold
+terminal. The whole thing takes about a minute.
+
+- **Backend** — `medguard-backend`, port **4000**
+- **Frontend** — `medguard-shield-main`, port **8080** (not negotiable, see step 4)
+- **Database** — local Postgres 14, database `medguard_dev`
+
+---
+
+## Step 0 — Check nothing is already listening
+
+**Do this first, every time.** Earlier testing can leave a *detached* server still
+holding port 4000 — one whose parent shell was closed or reaped, so it has no
+terminal, no visible logs, and no clean way to stop it. It answers requests
+normally, which is what makes it dangerous: it may be serving **stale code** and
+looks identical to a healthy server until the demo goes wrong.
+
+```bash
+lsof -i :4000
+lsof -i :8080
+```
+
+No output means the port is free — continue to step 1.
+
+If either prints a row, note the PID in the second column and kill it:
+
+```bash
+kill <pid>
+```
+
+Or kill whatever holds the port without looking it up:
+
+```bash
+kill $(lsof -nP -iTCP:4000 -sTCP:LISTEN -t)
+kill $(lsof -nP -iTCP:8080 -sTCP:LISTEN -t)
+```
+
+If a process ignores a plain `kill`, escalate with `kill -9 <pid>`.
+
+**Re-run both `lsof` commands and confirm they are silent before continuing.**
+
+---
+
+## Step 1 — Confirm Postgres is up
+
+```bash
+pg_isready
+```
+
+Expect `accepting connections`. If it is down:
+
+```bash
+brew services start postgresql@14
+```
+
+---
+
+## Step 2 — Start the backend (terminal 1)
+
+```bash
+cd "/Users/arkabera/Desktop/Wayam AI/MEDGUARD/medguard-backend"
+npm run dev
+```
+
+Expect exactly:
+
+```
+[medguard] API listening on http://localhost:4000
+[medguard] CORS origin: http://localhost:8080
+```
+
+Leave this terminal open. Errors here mean a missing `.env` — see
+`README.md` → Fresh-clone gotchas.
+
+---
+
+## Step 3 — Start the frontend (terminal 2)
+
+```bash
+cd "/Users/arkabera/Desktop/Wayam AI/MEDGUARD/medguard-shield-main"
+npm run dev
+```
+
+Expect `Local: http://localhost:8080/`.
+
+> **If it says 8081, stop and go back to step 0.**
+> Vite silently falls back to the next free port when 8080 is taken. The backend
+> pins its allowed CORS origin to `http://localhost:8080` via `FRONTEND_ORIGIN`,
+> so a frontend on 8081 gets every request rejected. The symptom is the worst
+> kind: the UI loads and looks fine, but no data ever appears.
+
+---
+
+## Step 4 — Go/no-go verification (terminal 3)
+
+Copy-paste this whole block. It is the pre-demo gate, not a dev-time convenience.
+
+```bash
+cd "/Users/arkabera/Desktop/Wayam AI/MEDGUARD/medguard-backend"
+set -a; . ./.env; set +a
+
+echo "--- 1. health ---"
+curl -s http://localhost:4000/health; echo
+
+echo "--- 2. auth gate is live (must be 401) ---"
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:4000/api/assets
+
+echo "--- 3. login ---"
+TOKEN=$(curl -s -X POST http://localhost:4000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@meridian.org","password":"'"$DEMO_USER_PASSWORD"'"}' \
+  | python3 -c "import json,sys;print(json.load(sys.stdin)['data']['token'])")
+[ -n "$TOKEN" ] && echo "token acquired" || echo "LOGIN FAILED"
+
+echo "--- 4. Sankey has all three tones ---"
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/dataflows \
+  | python3 -c "import json,sys,collections;d=json.load(sys.stdin)['data'];print(collections.Counter(f['status'] for f in d))"
+
+echo "--- 5. Risk matrix has all five bands ---"
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/risks \
+  | python3 -c "import json,sys;d=json.load(sys.stdin)['data'];print(sorted({r['band'] for r in d}))"
+```
+
+### Expected output — anything else is a no-go
+
+```
+--- 1. health ---
+{"status":"ok"}
+--- 2. auth gate is live (must be 401) ---
+401
+--- 3. login ---
+token acquired
+--- 4. Sankey has all three tones ---
+Counter({'warn': 5, 'ok': 3, 'violation': 2})
+--- 5. Risk matrix has all five bands ---
+['CRITICAL', 'EXTREME', 'HIGH', 'LOW', 'MODERATE']
+```
+
+Checks 4 and 5 are the ones that matter. They assert the two facts the demo
+visually depends on — that the Sankey can render all three ribbon tones, and
+that the risk matrix is spread across all five bands rather than clumped. A
+server can be perfectly healthy and still fail these if the data was wiped or
+partially seeded.
+
+### Reading a failure
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| health check hangs or connection refused | backend not running | step 2 |
+| check 2 returns 200 instead of 401 | stale pre-auth build on the port | step 0, then step 2 |
+| `LOGIN FAILED` | database not seeded, or `.env` missing `DEMO_USER_PASSWORD` | see Data reset below |
+| check 4 missing a tone / check 5 missing a band | data wiped or partially seeded | `npx prisma db seed` |
+| UI loads but shows no data | frontend on 8081, CORS rejecting | step 0, restart frontend on 8080 |
+
+---
+
+## Data reset
+
+| Command | Use when |
+|---|---|
+| `npx prisma db seed` | **Default.** Data looks wrong, partial, or edited during a rehearsal. Wipes and rebuilds all rows. Idempotent, and keeps primary keys stable so any saved link still resolves. Takes about a second. |
+| `npx prisma migrate reset --force` | **Last resort.** The schema itself is wrong or migrations are out of sync. Drops the database, re-runs every migration, then reseeds. Destroys everything in `medguard_dev`. |
+
+Both are safe to run against `medguard_dev` — it holds nothing but seeded
+fixtures. Re-run step 4 afterwards.
+
+> `npx prisma db seed` is exercised constantly and is known good.
+> `npx prisma migrate reset --force` is **documented but not exercised here**:
+> Prisma's CLI refuses to run it on an agent's say-so and demands explicit human
+> confirmation, which is the correct behaviour for a command that drops a
+> database. Run it yourself, and never point it at anything but `medguard_dev`.
+> Verify the target first with `grep DATABASE_URL .env`.
+
+---
+
+## Demo credentials
+
+All three accounts share the password in `DEMO_USER_PASSWORD` in the backend `.env`.
+
+| Email | Role |
+|---|---|
+| `admin@meridian.org` | ADMIN |
+| `f.alrashid@meridian.org` | ANALYST |
+| `a.patel@meridian.org` | VIEWER |
+
+Sessions last 8 hours and survive a page reload. There is no refresh-token flow —
+after 8 hours, logging in again is required.
+
+---
+
+## Shutting down
+
+```bash
+# Ctrl-C in terminals 1 and 2, then confirm the ports actually released:
+lsof -i :4000
+lsof -i :8080
+```
+
+Both silent means a clean stop. If either still shows a process, it detached —
+`kill <pid>`.
