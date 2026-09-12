@@ -13,7 +13,9 @@
     "test:watch": "vitest",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "test:integration": "vitest run tests/integration"
   },
   "engines": {
     "node": ">=20"
@@ -35,7 +37,9 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.10.1",
     "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
     "prisma": "^7.10.0",
+    "supertest": "^7.2.2",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
