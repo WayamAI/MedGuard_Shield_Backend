@@ -105,6 +105,26 @@ Expect `Local: http://localhost:8080/`.
 
 Copy-paste this whole block. It is the pre-demo gate, not a dev-time convenience.
 
+> **Do not run this while screen-sharing.**
+>
+> `set -a; . ./.env; set +a` exports every variable in `.env` into the shell for
+> the rest of that session — including `DEMO_USER_PASSWORD` and `JWT_SECRET`.
+> Nothing is printed by this block itself, but any later `env`, `export`, `set`,
+> or a shell prompt that expands variables will put both on screen in front of
+> the audience. `JWT_SECRET` is the key that signs every session token: anyone
+> who reads it can mint a valid token for any user.
+>
+> Run this in a terminal you are **not** sharing, before the call starts. If you
+> must verify mid-call, use a subshell so nothing persists, and remember it still
+> reads the file:
+>
+> ```bash
+> ( set -a; . ./.env; set +a; curl -s http://localhost:4000/health )
+> ```
+>
+> If you have already sourced it in a shared terminal, `unset DEMO_USER_PASSWORD
+> JWT_SECRET` clears both from that session.
+
 ```bash
 cd "/Users/arkabera/Desktop/Wayam AI/MEDGUARD/medguard-backend"
 set -a; . ./.env; set +a
