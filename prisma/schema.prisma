@@ -63,6 +63,23 @@ enum AccessLevel {
   ADMIN
 }
 
+enum ThreatSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// Lifecycle of a detection. RESOLVED and FALSE_POSITIVE are kept distinct
+/// because the difference matters: one is an incident that was handled, the
+/// other is a detector that needs tuning.
+enum ThreatStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  FALSE_POSITIVE
+}
+
 enum RiskBand {
   LOW
   MODERATE
@@ -106,6 +123,7 @@ model Asset {
   risks         Risk[]
   vendorAccess  VendorAssetAccess[]
   accessGrants  AccessGrant[]
+  threats       Threat[]
 
   @@index([type])
 }
@@ -265,4 +283,24 @@ model AccessGrant {
   @@unique([identityId, assetId])
   @@index([assetId])
   @@index([lastUsedAt])
+}
+
+/// A detected threat against an asset. Minimal by design -- enough to drive
+/// the threat feed, not a full incident-response record.
+model Threat {
+  id          Int             @id @default(autoincrement())
+  assetId     Int
+  severity    ThreatSeverity
+  status      ThreatStatus    @default(OPEN)
+  title       String
+  description String
+  detectedAt  DateTime        @default(now())
+  resolvedAt  DateTime?
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([assetId])
+  @@index([severity])
+  @@index([status])
+  @@index([detectedAt])
 }

@@ -1,0 +1,95 @@
+import request from "supertest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { createApp } from "../../src/app.js";
+import { prisma } from "../../src/lib/prisma.js";
+import { seedFixture, tokenFor } from "../helpers.js";
+
+const app = createApp();
+const HOUR = 3_600_000;
+let token: string;
+let ids: Awaited<ReturnType<typeof seedFixture>>;
+
+const hoursAgo = (h: number) => new Date(Date.now() - h * HOUR);
+
+beforeEach(async () => {
+  ids = await seedFixture();
+  token = await tokenFor(request(app), "admin@test.local");
+
+  await prisma.threat.createMany({
+    data: [
+      { assetId: ids.billingId, severity: "CRITICAL", status: "INVESTIGATING", title: "Open critical", description: "d", detectedAt: hoursAgo(4) },
+      { assetId: ids.ehrId, severity: "LOW", status: "OPEN", title: "Open low", description: "d", detectedAt: hoursAgo(2) },
+      { assetId: ids.ehrId, severity: "CRITICAL", status: "RESOLVED", title: "Resolved critical", description: "d", detectedAt: hoursAgo(50), resolvedAt: hoursAgo(20) },
+      { assetId: ids.billingId, severity: "HIGH", status: "FALSE_POSITIVE", title: "Noise", description: "d", detectedAt: hoursAgo(90), resolvedAt: hoursAgo(80) },
+    ],
+  });
+});
+
+afterAll(async () => {
+  await prisma.$disconnect();
+});
+
+const get = () => request(app).get("/api/threats").set("Authorization", `Bearer ${token}`);
+
+describe("GET /api/threats", () => {
+  it("requires authentication", async () => {
+    expect((await request(app).get("/api/threats")).status).toBe(401);
+  });
+
+  it("returns every threat with its asset name", async () => {
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect(res.body.data.threats).toHaveLength(4);
+    expect(res.body.data.threats[0].assetName).toBeTypeOf("string");
+  });
+
+  it("summarises by severity and status", async () => {
+    const res = await get();
+    expect(res.body.data.summary).toMatchObject({
+      total: 4,
+      open: 2,
+      openCritical: 1,
+      bySeverity: { CRITICAL: 2, HIGH: 1, MEDIUM: 0, LOW: 1 },
+      byStatus: { OPEN: 1, INVESTIGATING: 1, RESOLVED: 1, FALSE_POSITIVE: 1 },
+    });
+  });
+
+  it("counts only unresolved criticals in openCritical", async () => {
+    // Two criticals exist but one is RESOLVED, so the headline number is 1.
+    const res = await get();
+    expect(res.body.data.summary.bySeverity.CRITICAL).toBe(2);
+    expect(res.body.data.summary.openCritical).toBe(1);
+  });
+
+  it("puts unresolved threats before resolved ones regardless of severity", async () => {
+    const rows = (await get()).body.data.threats;
+    expect(rows[0].title).toBe("Open critical");
+    // The open LOW must still outrank the resolved CRITICAL.
+    expect(rows[1].title).toBe("Open low");
+    expect(rows[2].title).toBe("Resolved critical");
+  });
+
+  it("marks open vs closed explicitly rather than leaving clients to infer it", async () => {
+    const rows = (await get()).body.data.threats;
+    expect(rows.find((r: any) => r.title === "Open critical").open).toBe(true);
+    expect(rows.find((r: any) => r.title === "Resolved critical").open).toBe(false);
+    expect(rows.find((r: any) => r.title === "Noise").open).toBe(false);
+  });
+
+  it("reports hours since detection", async () => {
+    const row = (await get()).body.data.threats.find((r: any) => r.title === "Open critical");
+    expect(row.hoursSinceDetection).toBe(4);
+  });
+
+  it("keeps FALSE_POSITIVE distinct from RESOLVED", async () => {
+    const s = (await get()).body.data.summary.byStatus;
+    expect(s.RESOLVED).toBe(1);
+    expect(s.FALSE_POSITIVE).toBe(1);
+  });
+
+  it("is readable by VIEWER", async () => {
+    const viewer = await tokenFor(request(app), "viewer@test.local");
+    const res = await request(app).get("/api/threats").set("Authorization", `Bearer ${viewer}`);
+    expect(res.status).toBe(200);
+  });
+});

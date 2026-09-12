@@ -1,6 +1,7 @@
 import "dotenv/config";
 import type {
   AccessLevel, AssetType, BaaStatus, IdentityKind, Sensitivity,
+  ThreatSeverity, ThreatStatus,
 } from "../src/generated/prisma/client.js";
 import { prisma } from "../src/lib/prisma.js";
 import { computeRisk } from "../src/services/riskScoring.js";
@@ -183,15 +184,59 @@ const GRANTS: Array<{
   { identity: "legacy", asset: "billing", level: "WRITE", grantedDaysAgo: 910, usedDaysAgo: null },
 ];
 
+/**
+ * Threats, spread across severity and status so the feed shows a realistic
+ * mix rather than a wall of criticals. Each one points at an asset whose
+ * seeded weaknesses make it plausible: the bulk export is on the
+ * unencrypted billing database, the Tor login on the externally reachable
+ * claims gateway.
+ */
+const THREATS: Array<{
+  asset: string; severity: ThreatSeverity; status: ThreatStatus;
+  title: string; description: string; hoursAgo: number; resolvedHoursAgo: number | null;
+}> = [
+  {
+    asset: "billing", severity: "CRITICAL", status: "INVESTIGATING",
+    title: "Bulk PHI export from billing database",
+    description: "847 patient records exported to an unmanaged endpoint in a single session, well outside the normal daily pattern for this account.",
+    hoursAgo: 4, resolvedHoursAgo: null,
+  },
+  {
+    asset: "insurance", severity: "CRITICAL", status: "OPEN",
+    title: "Authenticated session from Tor exit node",
+    description: "Claims gateway accepted credentials from 185.220.101.45, a known Tor exit node. The gateway is internet-facing and unencrypted in transit.",
+    hoursAgo: 9, resolvedHoursAgo: null,
+  },
+  {
+    asset: "ehr", severity: "HIGH", status: "OPEN",
+    title: "Privilege escalation attempt on EHR core",
+    description: "An analyst-level account issued three consecutive admin-scoped API calls, all rejected. No successful escalation observed.",
+    hoursAgo: 26, resolvedHoursAgo: null,
+  },
+  {
+    asset: "imaging", severity: "MEDIUM", status: "RESOLVED",
+    title: "Imaging archive accessed outside working hours",
+    description: "Radiology PACS read at 02:14 from a new device. Confirmed as on-call review; device has since been enrolled.",
+    hoursAgo: 52, resolvedHoursAgo: 30,
+  },
+  {
+    asset: "analytics", severity: "LOW", status: "FALSE_POSITIVE",
+    title: "Anomalous query volume against analytics lake",
+    description: "Detector flagged a 6x spike in query volume. Traced to a scheduled quarterly reporting job; detector threshold has been retuned.",
+    hoursAgo: 96, resolvedHoursAgo: 80,
+  },
+];
+
 const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000);
 
 async function main() {
   // Idempotent, and RESTART IDENTITY keeps primary keys stable across
   // reseeds -- deleteMany() would leave the sequences advanced, so every
   // reseed would shift every id and break any link the frontend had saved.
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "AccessGrant", "Identity", "VendorRisk", "VendorAssetAccess", "Vendor", ' +
-      '"Risk", "DataFlow", "AssetPHI", "Asset", "PHIType", "User" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "Threat", "AccessGrant", "Identity", "VendorRisk", "VendorAssetAccess", ' +
+      '"Vendor", "Risk", "DataFlow", "AssetPHI", "Asset", "PHIType", "User" RESTART IDENTITY CASCADE',
   );
 
   const assetIds = new Map<string, number>();
@@ -320,6 +365,18 @@ async function main() {
     }),
   });
 
+  await prisma.threat.createMany({
+    data: THREATS.map((t) => ({
+      assetId: assetId(t.asset),
+      severity: t.severity,
+      status: t.status,
+      title: t.title,
+      description: t.description,
+      detectedAt: hoursAgo(t.hoursAgo),
+      resolvedAt: t.resolvedHoursAgo === null ? null : hoursAgo(t.resolvedHoursAgo),
+    })),
+  });
+
   const [assets, phiTypes, links, flows, risks, users, vendors, vendorAccess, vendorRisks] =
     await Promise.all([
       prisma.asset.count(),
@@ -332,15 +389,17 @@ async function main() {
       prisma.vendorAssetAccess.count(),
       prisma.vendorRisk.count(),
     ]);
-  const [identities, grants] = await Promise.all([
+  const [identities, grants, threats] = await Promise.all([
     prisma.identity.count(),
     prisma.accessGrant.count(),
+    prisma.threat.count(),
   ]);
 
   console.log(
     `[seed] assets=${assets} phiTypes=${phiTypes} assetPHI=${links} dataFlows=${flows} ` +
       `risks=${risks} users=${users} vendors=${vendors} vendorAccess=${vendorAccess} ` +
-      `vendorRisks=${vendorRisks} identities=${identities} accessGrants=${grants}`,
+      `vendorRisks=${vendorRisks} identities=${identities} accessGrants=${grants} ` +
+      `threats=${threats}`,
   );
 }
 
