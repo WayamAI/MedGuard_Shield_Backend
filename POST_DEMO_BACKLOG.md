@@ -98,8 +98,10 @@ grep DATABASE_URL .env          # confirm the target is medguard_dev, not anythi
 npx prisma migrate reset --force
 ```
 
-Then re-run the step 4 verification block in the runbook. Expect 8 assets, 10 flows,
-8 risks, 3 users, and asset ids 1–8.
+Then re-run the step 4 verification block in the runbook. Its check 6 asserts 8
+assets, 10 flows and 8 risks. The 3 user rows and the 1-8 asset id range are not
+asserted there — neither is exposed through the API — so confirm those with the
+two `psql` queries the runbook gives alongside its expected output.
 
 Likely never needed live — `npx prisma db seed` handles every realistic "data looks
 wrong" situation and is exercised constantly. But if a full reset *is* ever needed

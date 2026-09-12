@@ -121,6 +121,14 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/dataflows \
 echo "--- 5. Risk matrix has all five bands ---"
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/risks \
   | python3 -c "import json,sys;d=json.load(sys.stdin)['data'];print(sorted({r['band'] for r in d}))"
+
+echo "--- 6. row counts match a full seed ---"
+for pair in assets:8 dataflows:10 risks:8; do
+  ep=${pair%%:*}; want=${pair##*:}
+  got=$(curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:4000/api/$ep" \
+    | python3 -c "import json,sys;print(len(json.load(sys.stdin)['data']))")
+  [ "$got" = "$want" ] && echo "  $ep: $got OK" || echo "  $ep: $got EXPECTED $want <-- RESEED"
+done
 ```
 
 ### Expected output — anything else is a no-go
@@ -136,13 +144,26 @@ token acquired
 Counter({'warn': 5, 'ok': 3, 'violation': 2})
 --- 5. Risk matrix has all five bands ---
 ['CRITICAL', 'EXTREME', 'HIGH', 'LOW', 'MODERATE']
+--- 6. row counts match a full seed ---
+  assets: 8 OK
+  dataflows: 10 OK
+  risks: 8 OK
 ```
 
-Checks 4 and 5 are the ones that matter. They assert the two facts the demo
-visually depends on — that the Sankey can render all three ribbon tones, and
-that the risk matrix is spread across all five bands rather than clumped. A
-server can be perfectly healthy and still fail these if the data was wiped or
-partially seeded.
+Checks 4, 5 and 6 are the ones that matter. They assert the facts the demo
+visually depends on — that the Sankey can render all three ribbon tones, that
+the risk matrix is spread across all five bands rather than clumped, and that a
+full set of rows is present. A server can be perfectly healthy and still fail
+these if the data was wiped or partially seeded.
+
+Check 6 covers assets, data flows and risks — everything the two visualisations
+read. It does **not** assert the 3 seeded user rows or the 1-8 asset id range;
+neither is exposed through the API. Confirm those directly if you need them:
+
+```bash
+psql -d medguard_dev -c 'SELECT COUNT(*) FROM "User";'           # expect 3
+psql -d medguard_dev -c 'SELECT MIN(id), MAX(id) FROM "Asset";'  # expect 1 | 8
+```
 
 ### Reading a failure
 
