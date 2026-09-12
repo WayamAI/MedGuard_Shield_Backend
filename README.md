@@ -157,7 +157,10 @@ driver adapter in `src/lib/prisma.ts` at runtime — both off the same `DATABASE
 | `npm run dev` | `tsx watch` on `src/server.ts` |
 | `npm run build` | `tsc` → `dist/` |
 | `npm start` | run the compiled build |
-| `npm test` | vitest (risk engine unit tests) |
+| `npm test` | vitest — unit plus route-level integration tests |
+| `npm run test:integration` | integration tests only |
+| `npm run typecheck` | tsc over src, then over src + tests |
+| `npm run lint` | eslint |
 | `npx prisma db seed` | reseed (idempotent — wipes and rebuilds) |
 
 ## Endpoints
@@ -173,12 +176,86 @@ driver adapter in `src/lib/prisma.ts` at runtime — both off the same `DATABASE
 | GET | `/api/dataflows` | Sankey-shaped flows (`source`, `target`, `phiType`, `recordsPerDay`, `encrypted`, `status`) |
 | GET | `/api/risks` | matrix-shaped risks (`likelihood`, `impact`, `band`, `assetName`) |
 | POST | `/api/risks/:assetId/recompute` | re-score an asset from its stored inputs |
+| POST | `/api/assets` | create an asset · **ADMIN, ANALYST** |
+| PATCH | `/api/assets/:id` | partial update · **ADMIN, ANALYST** |
+| GET | `/api/vendors` | vendors with BAA state, assessment age, risk |
+| GET | `/api/vendors/:id` | one vendor: asset access, full risk breakdown |
+| POST | `/api/vendors` | create a vendor · **ADMIN, ANALYST** |
+| PATCH | `/api/vendors/:id` | partial update · **ADMIN, ANALYST** |
+| POST | `/api/vendors/:id/recompute` | re-score a vendor · **ADMIN, ANALYST** |
+| GET | `/api/access` | access grants with staleness and over-privilege flags |
+| GET | `/api/threats` | threat feed, triage-ordered, with a summary |
 
 Every route under `/api` except `/api/auth/login` and `/api/auth/logout` requires a
 session. `/health` is deliberately mounted outside `/api` so the gate never applies
 to it.
 
 Success bodies are `{ "data": ... }`; errors are `{ "error": { "code", "message" } }`.
+
+## Modules
+
+Beyond assets and flows, three modules share the same conventions: `{ data: ... }`
+envelopes, auth on everything under `/api`, reads open to any signed-in role,
+writes restricted to ADMIN and ANALYST.
+
+### Vendors — `/api/vendors`
+
+Third parties with PHI access. Two fields are derived server-side rather than
+left to the client:
+
+- `baaCompliant` — a vendor touching PHI without a signed Business Associate
+  Agreement is a HIPAA breach on its own, independent of whether anything has
+  leaked.
+- `assessmentOverdue` — true past 365 days, and true for a vendor never
+  assessed. Never-assessed is the worse case, not the neutral one.
+
+Vendor risk reuses `computeRisk` unchanged, so a change to the thresholds moves
+asset and vendor scoring together.
+
+### Access review — `/api/access`
+
+Identities (people and service accounts) and their grants on assets. Returns
+`{ summary, grants }`, worst-first.
+
+`Identity` is deliberately separate from `User`: `User` is an account that can
+log into MedGuard, while most identities holding PHI access never log into this
+tool at all.
+
+Each grant carries a `flags` array rather than a single verdict, because the
+remedies differ and they coexist:
+
+| Flag | Meaning |
+|---|---|
+| `STALE` | unused for more than 90 days |
+| `NEVER_USED` | granted and never once exercised |
+| `NO_MFA` | human identity without MFA — not raised for service accounts |
+| `INACTIVE_IDENTITY` | the identity is deactivated but the grant is still live |
+| `EXCESSIVE_LEVEL` | write or admin rights over an asset holding 50k+ records |
+
+### Threats — `/api/threats`
+
+Returns `{ summary, threats }`, ordered unresolved → severity → most recent.
+`OPEN` and `INVESTIGATING` rank equally, since both still need a human; ordering
+by the finer-grained status would push an open low-severity item above an
+investigating critical.
+
+`RESOLVED` and `FALSE_POSITIVE` are distinct because the difference is
+actionable — one is an incident that was handled, the other is a detector that
+needs tuning. `summary.openCritical` is separate from `summary.bySeverity.CRITICAL`
+because a dashboard leads with the former and they diverge as soon as anything
+is resolved.
+
+## Security
+
+`helmet` sets security headers on every response, errors included. CSP is off
+deliberately: this process serves JSON only.
+
+Rate limiting is two-tier. A global ceiling (300 per 15 min) stops a runaway
+client. The login route is far tighter (10 per 15 min) because bcrypt comparison
+is the most expensive operation in the system, which makes login both the
+cheapest endpoint to abuse and the only one where guessing has a prize. Only
+failures count, so a legitimate user is never locked out. Rejections use the
+same `{ error: { code, message } }` envelope as everything else.
 
 ## Authentication
 
@@ -242,7 +319,24 @@ makes it unit-testable without Postgres. riskEngine re-exports all of it and add
 the DB-bound `recomputeAssetRisk`. The seed derives its stored scores from the
 same function, so seeded rows and recomputed rows agree by construction.
 
+## Tests
+
+```bash
+npm test
+```
+
+108 tests: unit tests over the pure scoring functions, and integration tests
+driving the real Express app through supertest.
+
+Integration tests need a Postgres of their own — they truncate every table, so
+`tests/setup/globalSetup.ts` refuses to run against a database whose name does
+not contain "test". Default target is `medguard_test`; override with
+`TEST_DATABASE_URL`.
+
+```bash
+createdb medguard_test   # once
+```
+
 ## Not implemented yet
 
-Authentication (deferred for the demo — every `/api/*` route is currently
-open), multi-tenancy, and the vendor module.
+Multi-tenancy, and the deferred items recorded in `POST_DEMO_BACKLOG.md`.

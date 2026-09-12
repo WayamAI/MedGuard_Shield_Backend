@@ -187,7 +187,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/risks \
   | python3 -c "import json,sys;d=json.load(sys.stdin)['data'];print(sorted({r['band'] for r in d}))"
 
 echo "--- 6. row counts match a full seed ---"
-for pair in assets:8 dataflows:10 risks:8; do
+for pair in assets:8 dataflows:10 risks:8 vendors:5; do
   ep=${pair%%:*}; want=${pair##*:}
   got=$(curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:4000/api/$ep" \
     | python3 -c "import json,sys;print(len(json.load(sys.stdin)['data']))")
@@ -212,6 +212,24 @@ Counter({'warn': 5, 'ok': 3, 'violation': 2})
   assets: 8 OK
   dataflows: 10 OK
   risks: 8 OK
+  vendors: 5 OK
+```
+
+The three module endpoints return an object rather than an array, so they are
+checked separately:
+
+```bash
+echo "--- 7. module endpoints ---"
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/access \
+  | python3 -c "import json,sys;d=json.load(sys.stdin)['data'];print(f\"  access:  {d['summary']['total']} grants, {d['summary']['flagged']} flagged\")"
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/threats \
+  | python3 -c "import json,sys;d=json.load(sys.stdin)['data'];print(f\"  threats: {d['summary']['total']} total, {d['summary']['open']} open, {d['summary']['openCritical']} open critical\")"
+```
+
+```
+--- 7. module endpoints ---
+  access:  9 grants, 6 flagged
+  threats: 5 total, 3 open, 2 open critical
 ```
 
 Checks 4, 5 and 6 are the ones that matter. They assert the facts the demo
@@ -220,13 +238,15 @@ the risk matrix is spread across all five bands rather than clumped, and that a
 full set of rows is present. A server can be perfectly healthy and still fail
 these if the data was wiped or partially seeded.
 
-Check 6 covers assets, data flows and risks — everything the two visualisations
+Checks 6 and 7 cover assets, data flows, risks, vendors, access grants and
+threats — everything the two visualisations
 read. It does **not** assert the 3 seeded user rows or the 1-8 asset id range;
 neither is exposed through the API. Confirm those directly if you need them:
 
 ```bash
 psql -d medguard_dev -c 'SELECT COUNT(*) FROM "User";'           # expect 3
 psql -d medguard_dev -c 'SELECT MIN(id), MAX(id) FROM "Asset";'  # expect 1 | 8
+psql -d medguard_dev -c 'SELECT COUNT(*) FROM "Identity";'       # expect 6
 ```
 
 ### Reading a failure

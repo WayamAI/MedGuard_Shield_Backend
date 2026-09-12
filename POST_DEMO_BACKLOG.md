@@ -1,5 +1,10 @@
 # Post-Demo Backlog
 
+> **Items 1, 2 and 3 are now closed** on `post-demo/expansion`: integration
+> tests, RBAC on writes, and rate limiting plus security headers all shipped.
+> They are kept below for the reasoning. Items 4 and 5 stand, and the new
+> deferrals are recorded at the end.
+
 Known gaps recorded at the end of the demo build. **Nothing here blocks the demo** —
 it is all deliberately deferred, and captured so it is not rediscovered the hard way.
 
@@ -124,3 +129,79 @@ the runbook says.
   `src/services/riskScoring.ts` if the curve is ever revisited.
 - **`flowStatus` reads `mfaEnabled` from the target asset.** A flow has no MFA setting
   of its own; the target is the system the records land in.
+
+---
+
+# Deferred during the expansion phases
+
+Recorded rather than silently skipped.
+
+## 6. No pagination on any list endpoint
+
+`/api/assets`, `/api/vendors`, `/api/access` and `/api/threats` all return
+every row. Fine at demo scale — the largest is 9 rows — and wrong the moment a
+real estate has thousands of access grants, which is the endpoint that will hurt
+first.
+
+Needs cursor pagination plus a bounded default page size. The response envelope
+is already `{ data: ... }`, so a `meta` sibling can carry the cursor without
+breaking existing clients. `/api/access` should go first.
+
+## 7. RBAC is coarse: two tiers, no ownership
+
+`requireRole(["ADMIN", "ANALYST"])` gates every write identically, so an ANALYST
+can edit any asset or vendor in the estate. There is no notion of owning a
+record, no department scoping, and ADMIN and ANALYST are indistinguishable in
+what they may touch.
+
+Granular RBAC means deciding what ANALYST may *not* do — probably deleting, and
+probably editing records outside their department. That needs a product answer
+before it needs code.
+
+## 8. No delete anywhere
+
+Create and update only. Deletion raises questions the demo did not need: soft
+versus hard, what happens to a risk history when its asset goes, whether a
+vendor with live access can be removed at all. Cascades are already declared in
+the schema, so hard delete would work — that is exactly why it should not be
+added without deciding the policy first.
+
+## 9. Access grant `lastUsedAt` is seeded, never written
+
+Nothing updates it. Staleness detection is therefore only as good as whatever
+populates that column, and right now that is the seed script. A real deployment
+needs it fed from access logs; until then treat `/api/access` flags as a
+demonstration of the rule, not a live finding.
+
+## 10. Threats are read-only
+
+`GET /api/threats` only. No transition endpoint, so nothing can move a threat
+from OPEN to INVESTIGATING to RESOLVED through the API. Status changes are
+seed-time only. A write path needs an audit trail — who changed it, when, and
+why — which is a bigger piece than the read model.
+
+## 11. Vendor risk inputs cannot be edited
+
+`POST /api/vendors/:id/recompute` rescores from stored inputs, but no endpoint
+sets the four 1-5 values. Same gap exists for asset risk. The inputs are
+assessor judgement, so the write path probably wants a justification field and
+an audit record rather than a bare PATCH.
+
+## 12. CI does not run migrations against a clean database
+
+The workflow runs `prisma migrate deploy` through `globalSetup` on a fresh
+service container each run, which does exercise the migration chain. It does not
+test a migration against an *existing* populated database, so a migration that
+works on empty Postgres but fails on real data would pass CI.
+
+## 13. The CI workflow is parked, not active
+
+`ci/ci.yml` is the GitHub Actions workflow, but GitHub only runs workflows from
+`.github/workflows/`. It sits at `ci/` because a push touching
+`.github/workflows/` is rejected unless the token carries the `workflow` OAuth
+scope, which the authoring token lacked.
+
+Its steps are verified — dry-run in a clean clone against an empty database,
+all 108 tests passing, 4 migrations applied — but **GitHub has never run it**.
+Until someone moves the file, nothing is enforced on push or PR, so a broken
+commit can still land. `ci/README.md` has the two activation routes.
