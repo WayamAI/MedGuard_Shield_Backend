@@ -1,3 +1,4 @@
+import type request from "supertest";
 import { prisma } from "../src/lib/prisma.js";
 import { hashPassword } from "../src/services/authService.js";
 import { computeRisk } from "../src/services/riskScoring.js";
@@ -79,16 +80,19 @@ export async function seedFixture() {
   return { ehrId: ehr.id, billingId: billing.id, phiTypeId: clinical.id };
 }
 
+/** Whatever `request(app)` hands back -- taken from supertest rather than
+ * approximated, since a hand-rolled shape drifts from the real one. */
+type LoginAgent = ReturnType<typeof request>;
+
 /** Logs in through the real route and returns the bearer token. */
-export async function tokenFor(
-  agent: { post: (p: string) => any },
-  email: string,
-): Promise<string> {
-  const res = await agent
-    .post("/api/auth/login")
-    .send({ email, password: TEST_PASSWORD });
+export async function tokenFor(agent: LoginAgent, email: string): Promise<string> {
+  const res = await agent.post("/api/auth/login").send({ email, password: TEST_PASSWORD });
   if (res.status !== 200) {
     throw new Error(`login failed for ${email}: ${res.status} ${JSON.stringify(res.body)}`);
   }
-  return res.body.data.token as string;
+  const token: unknown = res.body?.data?.token;
+  if (typeof token !== "string") {
+    throw new Error(`login for ${email} returned no token: ${JSON.stringify(res.body)}`);
+  }
+  return token;
 }

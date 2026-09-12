@@ -29,7 +29,12 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
+/** The threat fields these assertions read. */
+type ThreatRow = { title: string; open: boolean; hoursSinceDetection: number };
+
 const get = () => request(app).get("/api/threats").set("Authorization", `Bearer ${token}`);
+const byTitle = (rows: ThreatRow[], title: string) =>
+  rows.find((r) => r.title === title) as ThreatRow;
 
 describe("GET /api/threats", () => {
   it("requires authentication", async () => {
@@ -71,13 +76,13 @@ describe("GET /api/threats", () => {
 
   it("marks open vs closed explicitly rather than leaving clients to infer it", async () => {
     const rows = (await get()).body.data.threats;
-    expect(rows.find((r: any) => r.title === "Open critical").open).toBe(true);
-    expect(rows.find((r: any) => r.title === "Resolved critical").open).toBe(false);
-    expect(rows.find((r: any) => r.title === "Noise").open).toBe(false);
+    expect(byTitle(rows, "Open critical").open).toBe(true);
+    expect(byTitle(rows, "Resolved critical").open).toBe(false);
+    expect(byTitle(rows, "Noise").open).toBe(false);
   });
 
   it("reports hours since detection", async () => {
-    const row = (await get()).body.data.threats.find((r: any) => r.title === "Open critical");
+    const row = byTitle((await get()).body.data.threats, "Open critical");
     expect(row.hoursSinceDetection).toBe(4);
   });
 

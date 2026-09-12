@@ -51,7 +51,16 @@ afterAll(async () => {
 });
 
 const get = () => request(app).get("/api/access").set("Authorization", `Bearer ${token}`);
-const byName = (rows: any[], name: string) => rows.find((r) => r.identityName === name);
+/** The grant fields these assertions read. */
+type GrantRow = {
+  identityName: string;
+  level: string;
+  flags: string[];
+  daysSinceUse: number | null;
+};
+
+const byName = (rows: GrantRow[], name: string) =>
+  rows.find((r) => r.identityName === name) as GrantRow;
 
 describe("GET /api/access", () => {
   it("requires authentication", async () => {
@@ -114,7 +123,10 @@ describe("GET /api/access", () => {
       data: { lastUsedAt: ago(STALE_AFTER_DAYS) },
     });
     const rows = (await get()).body.data.grants;
-    for (const r of rows.filter((x: any) => x.level === "READ" && x.daysSinceUse !== null)) {
+    const readGrants = (rows as GrantRow[]).filter(
+      (x) => x.level === "READ" && x.daysSinceUse !== null,
+    );
+    for (const r of readGrants) {
       expect(r.flags).not.toContain("STALE");
     }
   });

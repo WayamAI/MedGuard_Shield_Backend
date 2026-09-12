@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main, post-demo/expansion]
+  pull_request:
+    branches: [main, post-demo/expansion]
+
+# A newer push to the same branch makes an in-flight run redundant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck · lint · test
+    runs-on: ubuntu-latest
+
+    # The integration tests hit a real Postgres rather than a mock, so CI
+    # needs one. The name carries "test" because tests/setup/globalSetup.ts
+    # refuses to run against a database whose name does not.
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: medguard
+          POSTGRES_PASSWORD: medguard
+          POSTGRES_DB: medguard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_test?schema=public
+      TEST_DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_test?schema=public
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # npm 11 blocks package install scripts by default. Without this the
+      # install "succeeds" but never fetches the Prisma engine or the esbuild
+      # binary, and every later step fails for reasons that point nowhere
+      # near the cause.
+      - name: Install dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild prisma @prisma/engines esbuild
+
+      # The client is generated output and gitignored, so it must be built
+      # before anything imports it.
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
