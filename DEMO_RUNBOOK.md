@@ -9,7 +9,43 @@ terminal. The whole thing takes about a minute.
 
 ---
 
-## Step 0 — Check nothing is already listening
+## Step 0 — Install dependencies
+
+**Run this before anything else on a machine that has not run the demo before,
+and after any `git pull`.** Nothing from step 3 onward works without it, and the
+failure is not obvious: `npm run dev` exits with a module-resolution error
+rather than anything that mentions installing.
+
+```bash
+cd "/Users/arkabera/Desktop/Wayam AI/MEDGUARD/medguard-backend"
+npm install
+npm install-scripts approve prisma @prisma/engines esbuild   # npm 11+ blocks these by default
+npm install                                                   # re-run so the approved scripts execute
+npx prisma generate                                           # emits the client into src/generated/prisma
+
+cd "/Users/arkabera/Desktop/Wayam AI/MEDGUARD/medguard-shield-main"
+npm install
+```
+
+Two of those are easy to skip and both fail confusingly — see `README.md` →
+*Fresh-clone gotchas* for the full explanation:
+
+- Without the `install-scripts approve` step, `npm install` reports success but
+  never downloads the Prisma query engine, so every `prisma` command fails.
+- `npx prisma generate` is required after every clone and after any change to
+  `prisma/schema.prisma`; `src/generated/` is gitignored and not in the repo.
+
+If the database has never been created on this machine, also run
+`npx prisma migrate dev` then `npx prisma db seed` from the backend directory.
+
+> Use `npm`, not `bun`, for the frontend. The checkout path contains a space
+> (`Wayam AI`), which trips a bun bug (`CouldntReadCurrentDirectory`).
+
+Already installed and only rehearsing? Skip to step 1.
+
+---
+
+## Step 1 — Check nothing is already listening
 
 **Do this first, every time.** Earlier testing can leave a *detached* server still
 holding port 4000 — one whose parent shell was closed or reaped, so it has no
@@ -22,7 +58,7 @@ lsof -nP -iTCP:4000 -sTCP:LISTEN
 lsof -nP -iTCP:8080 -sTCP:LISTEN
 ```
 
-No output means the port is free — continue to step 1.
+No output means the port is free — continue to step 2.
 
 `-sTCP:LISTEN` is not optional. A bare `lsof -i :8080` also lists *client*
 connections **to** that port — including your own browser. On a machine with the
@@ -51,7 +87,7 @@ If a process ignores a plain `kill`, escalate with `kill -9 <pid>`.
 
 ---
 
-## Step 1 — Confirm Postgres is up
+## Step 2 — Confirm Postgres is up
 
 ```bash
 pg_isready
@@ -65,7 +101,7 @@ brew services start postgresql@14
 
 ---
 
-## Step 2 — Start the backend (terminal 1)
+## Step 3 — Start the backend (terminal 1)
 
 ```bash
 cd "/Users/arkabera/Desktop/Wayam AI/MEDGUARD/medguard-backend"
@@ -79,12 +115,12 @@ Expect exactly:
 [medguard] CORS origin: http://localhost:8080
 ```
 
-Leave this terminal open. Errors here mean a missing `.env` — see
+Leave this terminal open. Errors here mean a missing `.env`, or that step 0 was skipped — see
 `README.md` → Fresh-clone gotchas.
 
 ---
 
-## Step 3 — Start the frontend (terminal 2)
+## Step 4 — Start the frontend (terminal 2)
 
 ```bash
 cd "/Users/arkabera/Desktop/Wayam AI/MEDGUARD/medguard-shield-main"
@@ -93,7 +129,7 @@ npm run dev
 
 Expect `Local: http://localhost:8080/`.
 
-> **If it says 8081, stop and go back to step 0.**
+> **If it says 8081, stop and go back to step 1.**
 > Vite silently falls back to the next free port when 8080 is taken. The backend
 > pins its allowed CORS origin to `http://localhost:8080` via `FRONTEND_ORIGIN`,
 > so a frontend on 8081 gets every request rejected. The symptom is the worst
@@ -101,7 +137,7 @@ Expect `Local: http://localhost:8080/`.
 
 ---
 
-## Step 4 — Go/no-go verification (terminal 3)
+## Step 5 — Go/no-go verification (terminal 3)
 
 Copy-paste this whole block. It is the pre-demo gate, not a dev-time convenience.
 
@@ -197,12 +233,12 @@ psql -d medguard_dev -c 'SELECT MIN(id), MAX(id) FROM "Asset";'  # expect 1 | 8
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| health check hangs or connection refused | backend not running | step 2 |
-| check 2 returns 200 instead of 401 | stale pre-auth build on the port | step 0, then step 2 |
+| health check hangs or connection refused | backend not running | step 3 |
+| check 2 returns 200 instead of 401 | stale pre-auth build on the port | step 1, then step 3 |
 | `LOGIN FAILED` | database not seeded, or `.env` missing `DEMO_USER_PASSWORD` | see Data reset below |
 | check 4 missing a tone / check 5 missing a band | data wiped or partially seeded | `npx prisma db seed` |
-| UI loads but shows no data | frontend on 8081, CORS rejecting | step 0, restart frontend on 8080 |
-| logged out unexpectedly mid-demo | the page was reloaded; the token is in memory only | sign in again, and avoid reload (see Demo credentials) |
+| UI loads but shows no data | frontend on 8081, CORS rejecting | step 1, restart frontend on 8080 |
+| logged out unexpectedly mid-demo | the page was reloaded and the client does not use the session cookie | sign in again, and avoid reload (see Demo credentials) |
 
 ---
 
@@ -214,7 +250,7 @@ psql -d medguard_dev -c 'SELECT MIN(id), MAX(id) FROM "Asset";'  # expect 1 | 8
 | `npx prisma migrate reset --force` | **Last resort.** The schema itself is wrong or migrations are out of sync. Drops the database, re-runs every migration, then reseeds. Destroys everything in `medguard_dev`. |
 
 Both are safe to run against `medguard_dev` — it holds nothing but seeded
-fixtures. Re-run step 4 afterwards.
+fixtures. Re-run step 5 afterwards.
 
 > `npx prisma db seed` is exercised constantly and is known good.
 > `npx prisma migrate reset --force` is **documented but not exercised here**:
@@ -235,22 +271,39 @@ All three accounts share the password in `DEMO_USER_PASSWORD` in the backend `.e
 | `f.alrashid@meridian.org` | ANALYST |
 | `a.patel@meridian.org` | VIEWER |
 
-The session token is held **in memory only** — never in localStorage or
-sessionStorage — so it is deliberately not persistent:
+A login is valid for 8 hours. There is no refresh-token flow, so after that a
+fresh sign-in is required.
 
-| Action | Effect |
-|---|---|
-| Navigating inside the app (sidebar links) | session kept |
-| **Reloading the page, or opening the app in a new tab** | **session lost, back to login** |
-| Closing the tab | session lost |
-| Leaving it idle up to 8 hours | session kept (token TTL) |
+**Whether a session survives a page reload is decided by the client, not by this
+API.** `/api/auth/login` returns the token in the response body *and* sets it as
+a persistent httpOnly cookie, and `requireAuth` accepts either:
 
-**Do not press reload during the demo.** There is no refresh-token flow, so a
-reload drops you at the login screen and you will have to sign in again. Move
-between screens using the sidebar, never the browser's reload or address bar.
+```
+Set-Cookie: medguard_token=...; Max-Age=28800; Path=/; HttpOnly; SameSite=Lax
+```
 
-A token issued at login lasts 8 hours, so a session that is never reloaded will
-outlast any demo.
+Verified against a running server — a request carrying only that cookie and no
+`Authorization` header returns 200:
+
+```bash
+curl -s -c /tmp/c.txt -X POST http://localhost:4000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@meridian.org","password":"'"$DEMO_USER_PASSWORD"'"}' > /dev/null
+curl -s -o /dev/null -w '%{http_code}\n' -b /tmp/c.txt http://localhost:4000/api/assets   # 200
+curl -s -o /dev/null -w '%{http_code}\n'              http://localhost:4000/api/assets   # 401
+```
+
+So:
+
+- A client that relies on the **cookie** keeps its session across a reload, for
+  the full 8 hours.
+- A client that holds the token **in memory** and does not send the cookie loses
+  its session on reload, and lands back on the login screen.
+
+Which path the MedGuard frontend takes is a frontend concern and is not asserted
+here. **Confirm it before presenting** — sign in, press reload once, and see
+whether you stay signed in. If you do not, avoid the browser's reload and address
+bar during the demo and move between screens using the sidebar.
 
 ---
 
