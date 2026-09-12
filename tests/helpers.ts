@@ -6,6 +6,33 @@ import { computeRisk } from "../src/services/riskScoring.js";
 export const TEST_PASSWORD = "test-password";
 
 /**
+ * bcrypt is intentionally slow -- that is its job -- but hashing the same
+ * constant on every beforeEach cost ~62ms a time and contributed to hook
+ * timeouts. Hash once per process instead.
+ */
+let passwordHashPromise: Promise<string> | null = null;
+function testPasswordHash(): Promise<string> {
+  passwordHashPromise ??= hashPassword(TEST_PASSWORD);
+  return passwordHashPromise;
+}
+
+/**
+ * Logging in three roles per test cost ~240ms, most of it bcrypt.compare.
+ * Tokens are safe to reuse across resets: requireAuth verifies the JWT
+ * signature and claims without touching the database, and the fixture
+ * recreates users in a fixed order after RESTART IDENTITY, so the ids the
+ * token carries still name the same people.
+ *
+ * Keyed by email. Cleared by resetTokenCache() if a test ever needs a
+ * genuinely fresh login.
+ */
+const tokenCache = new Map<string, string>();
+
+export function resetTokenCache(): void {
+  tokenCache.clear();
+}
+
+/**
  * A deliberately small fixture — two assets, one PHI type, one flow, two
  * risks — chosen so every assertion can name exact numbers rather than
  * asserting "greater than zero", which passes even when seeding is broken.
@@ -33,7 +60,7 @@ export async function resetDatabase() {
 export async function seedFixture() {
   await resetDatabase();
 
-  const passwordHash = await hashPassword(TEST_PASSWORD);
+  const passwordHash = await testPasswordHash();
   await prisma.user.createMany({
     data: [
       { email: "admin@test.local", role: "ADMIN", passwordHash },
@@ -86,6 +113,9 @@ type LoginAgent = ReturnType<typeof request>;
 
 /** Logs in through the real route and returns the bearer token. */
 export async function tokenFor(agent: LoginAgent, email: string): Promise<string> {
+  const cached = tokenCache.get(email);
+  if (cached) return cached;
+
   const res = await agent.post("/api/auth/login").send({ email, password: TEST_PASSWORD });
   if (res.status !== 200) {
     throw new Error(`login failed for ${email}: ${res.status} ${JSON.stringify(res.body)}`);
@@ -94,5 +124,6 @@ export async function tokenFor(agent: LoginAgent, email: string): Promise<string
   if (typeof token !== "string") {
     throw new Error(`login for ${email} returned no token: ${JSON.stringify(res.body)}`);
   }
+  tokenCache.set(email, token);
   return token;
 }

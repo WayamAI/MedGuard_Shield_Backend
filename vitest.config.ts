@@ -31,6 +31,10 @@ export default defineConfig({
     // Integration tests share one database; parallel files would race on the
     // same rows, so run them one file at a time.
     fileParallelism: false,
+    // Fixture setup truncates every table and seeds rows. That is real work,
+    // and on a loaded machine it occasionally breached the 10s default and
+    // failed a hook that was merely slow, not broken.
+    hookTimeout: 30_000,
     env: TEST_ENV,
   },
 });
