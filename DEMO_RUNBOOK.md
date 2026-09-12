@@ -18,19 +18,27 @@ normally, which is what makes it dangerous: it may be serving **stale code** and
 looks identical to a healthy server until the demo goes wrong.
 
 ```bash
-lsof -i :4000
-lsof -i :8080
+lsof -nP -iTCP:4000 -sTCP:LISTEN
+lsof -nP -iTCP:8080 -sTCP:LISTEN
 ```
 
 No output means the port is free — continue to step 1.
 
-If either prints a row, note the PID in the second column and kill it:
+`-sTCP:LISTEN` is not optional. A bare `lsof -i :8080` also lists *client*
+connections **to** that port — including your own browser. On a machine with the
+demo open in Chrome it prints rows like:
 
-```bash
-kill <pid>
+```
+Google    1016 arkabera   52u  IPv6 ...  TCP localhost:51713->localhost:http-alt (ESTABLISHED)
+node     19832 arkabera   13u  IPv6 ...  TCP *:http-alt (LISTEN)
 ```
 
-Or kill whatever holds the port without looking it up:
+Only the `(LISTEN)` row is the server. Killing the PID from the Chrome row kills
+the browser you are about to present in. `-nP` also prints real port numbers;
+without it macOS substitutes service names and 4000 shows up as `terabase`,
+8080 as `http-alt`, which is easy to misread as the wrong process.
+
+To kill whatever holds the port, without reading PIDs at all:
 
 ```bash
 kill $(lsof -nP -iTCP:4000 -sTCP:LISTEN -t)
@@ -174,6 +182,7 @@ psql -d medguard_dev -c 'SELECT MIN(id), MAX(id) FROM "Asset";'  # expect 1 | 8
 | `LOGIN FAILED` | database not seeded, or `.env` missing `DEMO_USER_PASSWORD` | see Data reset below |
 | check 4 missing a tone / check 5 missing a band | data wiped or partially seeded | `npx prisma db seed` |
 | UI loads but shows no data | frontend on 8081, CORS rejecting | step 0, restart frontend on 8080 |
+| logged out unexpectedly mid-demo | the page was reloaded; the token is in memory only | sign in again, and avoid reload (see Demo credentials) |
 
 ---
 
@@ -206,8 +215,22 @@ All three accounts share the password in `DEMO_USER_PASSWORD` in the backend `.e
 | `f.alrashid@meridian.org` | ANALYST |
 | `a.patel@meridian.org` | VIEWER |
 
-Sessions last 8 hours and survive a page reload. There is no refresh-token flow —
-after 8 hours, logging in again is required.
+The session token is held **in memory only** — never in localStorage or
+sessionStorage — so it is deliberately not persistent:
+
+| Action | Effect |
+|---|---|
+| Navigating inside the app (sidebar links) | session kept |
+| **Reloading the page, or opening the app in a new tab** | **session lost, back to login** |
+| Closing the tab | session lost |
+| Leaving it idle up to 8 hours | session kept (token TTL) |
+
+**Do not press reload during the demo.** There is no refresh-token flow, so a
+reload drops you at the login screen and you will have to sign in again. Move
+between screens using the sidebar, never the browser's reload or address bar.
+
+A token issued at login lasts 8 hours, so a session that is never reloaded will
+outlast any demo.
 
 ---
 
@@ -215,8 +238,8 @@ after 8 hours, logging in again is required.
 
 ```bash
 # Ctrl-C in terminals 1 and 2, then confirm the ports actually released:
-lsof -i :4000
-lsof -i :8080
+lsof -nP -iTCP:4000 -sTCP:LISTEN
+lsof -nP -iTCP:8080 -sTCP:LISTEN
 ```
 
 Both silent means a clean stop. If either still shows a process, it detached —
