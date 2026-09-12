@@ -194,14 +194,12 @@ service container each run, which does exercise the migration chain. It does not
 test a migration against an *existing* populated database, so a migration that
 works on empty Postgres but fails on real data would pass CI.
 
-## 13. The CI workflow is parked, not active
+## 13. ~~The CI workflow is parked, not active~~ — CLOSED
 
-`ci/ci.yml` is the GitHub Actions workflow, but GitHub only runs workflows from
-`.github/workflows/`. It sits at `ci/` because a push touching
-`.github/workflows/` is rejected unless the token carries the `workflow` OAuth
-scope, which the authoring token lacked.
+Closed once the `workflow` OAuth scope was granted. `.github/workflows/ci.yml`
+is live and enforcing typecheck, lint and the full suite on push and PR to
+`main` and `post-demo/expansion`. First green run: 34699885907.
 
-Its steps are verified — dry-run in a clean clone against an empty database,
-all 108 tests passing, 4 migrations applied — but **GitHub has never run it**.
-Until someone moves the file, nothing is enforced on push or PR, so a broken
-commit can still land. `ci/README.md` has the two activation routes.
+One follow-up left behind it: GitHub now warns that `actions/checkout@v4` and
+`actions/setup-node@v4` target Node.js 20, which is deprecated on runners and
+being forced onto Node 24. Harmless today, worth bumping to v5 when convenient.
