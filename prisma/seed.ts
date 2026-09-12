@@ -1,5 +1,5 @@
 import "dotenv/config";
-import type { AssetType, Sensitivity } from "../src/generated/prisma/client.js";
+import type { AssetType, BaaStatus, Sensitivity } from "../src/generated/prisma/client.js";
 import { prisma } from "../src/lib/prisma.js";
 import { computeRisk } from "../src/services/riskScoring.js";
 import { hashPassword } from "../src/services/authService.js";
@@ -105,6 +105,43 @@ const USERS: Array<{ email: string; role: "ADMIN" | "ANALYST" | "VIEWER" }> = [
   { email: "a.patel@meridian.org", role: "VIEWER" },
 ];
 
+/**
+ * Vendors, spread deliberately across BAA and assessment states so the module
+ * has something to show. The two worst cases are the point of the demo: a
+ * vendor with PHI access and no BAA at all, and one whose BAA has expired.
+ */
+const VENDORS: Array<{
+  key: string; name: string; baaStatus: BaaStatus; phiVolume: number;
+  daysSinceAssessment: number | null; assets: string[];
+  likelihood: number; impact: number; exposure: number; controlGap: number;
+}> = [
+  {
+    key: "claims", name: "Northwind Claims Processing", baaStatus: "MISSING",
+    phiVolume: 71_300, daysSinceAssessment: null, assets: ["billing", "insurance"],
+    likelihood: 5, impact: 5, exposure: 5, controlGap: 5, // 100.00 EXTREME
+  },
+  {
+    key: "transcribe", name: "Veritas Transcription", baaStatus: "EXPIRED",
+    phiVolume: 44_800, daysSinceAssessment: 512, assets: ["ehr"],
+    likelihood: 4, impact: 5, exposure: 5, controlGap: 5, // 80.00 CRITICAL
+  },
+  {
+    key: "imaging", name: "Clarity Imaging Partners", baaStatus: "PENDING",
+    phiVolume: 51_200, daysSinceAssessment: 240, assets: ["imaging", "lab"],
+    likelihood: 4, impact: 4, exposure: 5, controlGap: 3, // 38.40 MODERATE
+  },
+  {
+    key: "analytics", name: "Helix Population Analytics", baaStatus: "SIGNED",
+    phiVolume: 229_000, daysSinceAssessment: 95, assets: ["analytics"],
+    likelihood: 3, impact: 5, exposure: 4, controlGap: 3, // 28.80 MODERATE
+  },
+  {
+    key: "backup", name: "Sentinel Backup Services", baaStatus: "SIGNED",
+    phiVolume: 12_400, daysSinceAssessment: 30, assets: ["portal"],
+    likelihood: 2, impact: 4, exposure: 3, controlGap: 3, // 11.52 LOW
+  },
+];
+
 const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
 async function main() {
@@ -112,7 +149,7 @@ async function main() {
   // reseeds -- deleteMany() would leave the sequences advanced, so every
   // reseed would shift every id and break any link the frontend had saved.
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "Risk", "DataFlow", "AssetPHI", "Asset", "PHIType", "User" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "VendorRisk", "VendorAssetAccess", "Vendor", "Risk", "DataFlow", "AssetPHI", "Asset", "PHIType", "User" RESTART IDENTITY CASCADE',
   );
 
   const assetIds = new Map<string, number>();
@@ -191,17 +228,48 @@ async function main() {
     data: USERS.map((u) => ({ ...u, passwordHash })),
   });
 
-  const [assets, phiTypes, links, flows, risks, users] = await Promise.all([
-    prisma.asset.count(),
-    prisma.pHIType.count(),
-    prisma.assetPHI.count(),
-    prisma.dataFlow.count(),
-    prisma.risk.count(),
-    prisma.user.count(),
-  ]);
+  for (const v of VENDORS) {
+    const vendor = await prisma.vendor.create({
+      data: {
+        name: v.name,
+        baaStatus: v.baaStatus,
+        phiVolume: v.phiVolume,
+        lastAssessedAt: v.daysSinceAssessment === null ? null : daysAgo(v.daysSinceAssessment),
+      },
+    });
+
+    await prisma.vendorAssetAccess.createMany({
+      data: v.assets.map((key) => ({ vendorId: vendor.id, assetId: assetId(key) })),
+    });
+
+    const { score, band } = computeRisk(v.likelihood, v.impact, v.exposure, v.controlGap);
+    await prisma.vendorRisk.create({
+      data: {
+        vendorId: vendor.id,
+        likelihood: v.likelihood, impact: v.impact,
+        exposure: v.exposure, controlGap: v.controlGap,
+        score, band,
+      },
+    });
+  }
+
+  const [assets, phiTypes, links, flows, risks, users, vendors, vendorAccess, vendorRisks] =
+    await Promise.all([
+      prisma.asset.count(),
+      prisma.pHIType.count(),
+      prisma.assetPHI.count(),
+      prisma.dataFlow.count(),
+      prisma.risk.count(),
+      prisma.user.count(),
+      prisma.vendor.count(),
+      prisma.vendorAssetAccess.count(),
+      prisma.vendorRisk.count(),
+    ]);
 
   console.log(
-    `[seed] assets=${assets} phiTypes=${phiTypes} assetPHI=${links} dataFlows=${flows} risks=${risks} users=${users}`,
+    `[seed] assets=${assets} phiTypes=${phiTypes} assetPHI=${links} dataFlows=${flows} ` +
+      `risks=${risks} users=${users} vendors=${vendors} vendorAccess=${vendorAccess} ` +
+      `vendorRisks=${vendorRisks}`,
   );
 }
 

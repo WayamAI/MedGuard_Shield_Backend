@@ -38,6 +38,16 @@ enum Sensitivity {
   CRITICAL
 }
 
+/// Business Associate Agreement state. Under HIPAA a vendor touching PHI
+/// without a signed BAA is a compliance breach in itself, independent of
+/// whether anything has actually leaked.
+enum BaaStatus {
+  SIGNED
+  PENDING
+  EXPIRED
+  MISSING
+}
+
 enum RiskBand {
   LOW
   MODERATE
@@ -79,6 +89,7 @@ model Asset {
   outboundFlows DataFlow[] @relation("FlowSource")
   inboundFlows  DataFlow[] @relation("FlowTarget")
   risks         Risk[]
+  vendorAccess  VendorAssetAccess[]
 
   @@index([type])
 }
@@ -146,4 +157,56 @@ model Risk {
   @@index([assetId])
   @@index([band])
   @@index([computedAt])
+}
+
+/// A third party with access to PHI. Vendor risk is scored with the same
+/// engine as asset risk -- the inputs are argued differently, but the formula
+/// and bands are identical, so one change of thresholds moves both.
+model Vendor {
+  id             Int       @id @default(autoincrement())
+  name           String    @unique
+  baaStatus      BaaStatus @default(MISSING)
+  phiVolume      Int       @default(0)
+  lastAssessedAt DateTime?
+  createdAt      DateTime  @default(now())
+
+  assetAccess VendorAssetAccess[]
+  risks       VendorRisk[]
+
+  @@index([baaStatus])
+}
+
+/// Which assets a vendor can reach. Access is the thing that turns a paper
+/// compliance gap into an actual exposure, so it is modelled explicitly
+/// rather than inferred from data flows.
+model VendorAssetAccess {
+  vendorId  Int
+  assetId   Int
+  grantedAt DateTime @default(now())
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  asset  Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@id([vendorId, assetId])
+  @@index([assetId])
+}
+
+/// Scored risk for a vendor. Mirrors Risk, deliberately: same four 1-5
+/// inputs, same derived score and band, same rule that score and band are
+/// never written by hand.
+model VendorRisk {
+  id         Int      @id @default(autoincrement())
+  vendorId   Int
+  likelihood Int
+  impact     Int
+  exposure   Int
+  controlGap Int
+  score      Float
+  band       RiskBand
+  computedAt DateTime @default(now())
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([vendorId])
+  @@index([band])
 }

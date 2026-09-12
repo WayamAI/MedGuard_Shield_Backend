@@ -12,10 +12,21 @@ export const TEST_PASSWORD = "test-password";
  * The two assets differ in mfaEnabled so the flow-status rules are
  * observable through the API.
  */
+/**
+ * Truncates every application table, discovered from the database rather than
+ * listed here. A hardcoded list silently goes stale the moment a model is
+ * added -- which it did: the vendor tables were missing, so rows leaked
+ * between tests and every unique constraint tripped on the second run.
+ */
 export async function resetDatabase() {
-  await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "Risk", "DataFlow", "AssetPHI", "Asset", "PHIType", "User" RESTART IDENTITY CASCADE',
+  const rows = await prisma.$queryRawUnsafe<Array<{ tablename: string }>>(
+    `SELECT tablename FROM pg_tables
+      WHERE schemaname = 'public' AND tablename NOT LIKE '\\_prisma%'`,
   );
+  if (rows.length === 0) return;
+
+  const list = rows.map((r) => `"${r.tablename}"`).join(", ");
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`);
 }
 
 export async function seedFixture() {
