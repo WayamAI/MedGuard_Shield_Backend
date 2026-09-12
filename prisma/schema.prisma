@@ -48,6 +48,21 @@ enum BaaStatus {
   MISSING
 }
 
+/// Humans and machines both hold PHI access. Service accounts are separated
+/// because they behave differently: no MFA, no interactive login, and they
+/// are the ones that quietly outlive the integration they were created for.
+enum IdentityKind {
+  USER
+  SERVICE_ACCOUNT
+}
+
+/// What an identity can do with an asset.
+enum AccessLevel {
+  READ
+  WRITE
+  ADMIN
+}
+
 enum RiskBand {
   LOW
   MODERATE
@@ -90,6 +105,7 @@ model Asset {
   inboundFlows  DataFlow[] @relation("FlowTarget")
   risks         Risk[]
   vendorAccess  VendorAssetAccess[]
+  accessGrants  AccessGrant[]
 
   @@index([type])
 }
@@ -209,4 +225,44 @@ model VendorRisk {
 
   @@index([vendorId])
   @@index([band])
+}
+
+/// A person or service account that can reach PHI. Distinct from User, which
+/// is an account that can log into MedGuard itself -- most identities here
+/// never log into this tool at all.
+model Identity {
+  id          Int          @id @default(autoincrement())
+  displayName String
+  email       String?      @unique
+  kind        IdentityKind @default(USER)
+  department  String?
+  role        Role         @default(VIEWER)
+  active      Boolean      @default(true)
+  mfaEnabled  Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+
+  grants AccessGrant[]
+
+  @@index([kind])
+  @@index([active])
+}
+
+/// One identity's access to one asset. lastUsedAt is the field that matters:
+/// a grant nobody has exercised in months is the classic over-privilege
+/// finding, and it cannot be spotted without recording use separately from
+/// the grant date.
+model AccessGrant {
+  id         Int         @id @default(autoincrement())
+  identityId Int
+  assetId    Int
+  level      AccessLevel @default(READ)
+  grantedAt  DateTime    @default(now())
+  lastUsedAt DateTime?
+
+  identity Identity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  asset    Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([identityId, assetId])
+  @@index([assetId])
+  @@index([lastUsedAt])
 }

@@ -1,5 +1,7 @@
 import "dotenv/config";
-import type { AssetType, BaaStatus, Sensitivity } from "../src/generated/prisma/client.js";
+import type {
+  AccessLevel, AssetType, BaaStatus, IdentityKind, Sensitivity,
+} from "../src/generated/prisma/client.js";
 import { prisma } from "../src/lib/prisma.js";
 import { computeRisk } from "../src/services/riskScoring.js";
 import { hashPassword } from "../src/services/authService.js";
@@ -142,6 +144,45 @@ const VENDORS: Array<{
   },
 ];
 
+/**
+ * Identities and their access. Deliberately includes the findings an access
+ * review exists to surface:
+ *  - a departed contractor whose admin grant is still live and unused for 8
+ *    months (inactive identity + stale + excessive level: four flags)
+ *  - a legacy service account nobody has ever seen use
+ *  - a billing analyst with write access to the EHR and no MFA
+ */
+const IDENTITIES: Array<{
+  key: string; displayName: string; email: string | null; kind: IdentityKind;
+  department: string | null; role: "ADMIN" | "ANALYST" | "VIEWER";
+  active: boolean; mfaEnabled: boolean;
+}> = [
+  { key: "patel", displayName: "Dr. Aisha Patel", email: "a.patel@meridian.org", kind: "USER", department: "ICU", role: "VIEWER", active: true, mfaEnabled: true },
+  { key: "thompson", displayName: "Marcus Thompson", email: "m.thompson@meridian.org", kind: "USER", department: "IT Infrastructure", role: "ADMIN", active: true, mfaEnabled: true },
+  { key: "santos", displayName: "Maria Santos", email: "m.santos@meridian.org", kind: "USER", department: "Billing", role: "ANALYST", active: true, mfaEnabled: false },
+  { key: "chen", displayName: "Robert Chen (contractor)", email: "r.chen@contractor.example", kind: "USER", department: "Radiology", role: "ANALYST", active: false, mfaEnabled: false },
+  { key: "etl", displayName: "svc-analytics-etl", email: null, kind: "SERVICE_ACCOUNT", department: "Data Platform", role: "ANALYST", active: true, mfaEnabled: false },
+  { key: "legacy", displayName: "svc-legacy-billing-sync", email: null, kind: "SERVICE_ACCOUNT", department: "Billing", role: "ANALYST", active: true, mfaEnabled: false },
+];
+
+const GRANTS: Array<{
+  identity: string; asset: string; level: AccessLevel;
+  grantedDaysAgo: number; usedDaysAgo: number | null;
+}> = [
+  { identity: "patel", asset: "ehr", level: "READ", grantedDaysAgo: 420, usedDaysAgo: 1 },
+  { identity: "thompson", asset: "ehr", level: "ADMIN", grantedDaysAgo: 800, usedDaysAgo: 2 },
+  { identity: "thompson", asset: "analytics", level: "ADMIN", grantedDaysAgo: 300, usedDaysAgo: 5 },
+  { identity: "santos", asset: "billing", level: "WRITE", grantedDaysAgo: 600, usedDaysAgo: 1 },
+  // No MFA, write access to a 412k-record EHR.
+  { identity: "santos", asset: "ehr", level: "WRITE", grantedDaysAgo: 240, usedDaysAgo: 3 },
+  // The headline finding: departed contractor, admin rights, unused 8 months.
+  { identity: "chen", asset: "imaging", level: "ADMIN", grantedDaysAgo: 500, usedDaysAgo: 243 },
+  { identity: "etl", asset: "analytics", level: "READ", grantedDaysAgo: 200, usedDaysAgo: 1 },
+  { identity: "etl", asset: "lab", level: "READ", grantedDaysAgo: 200, usedDaysAgo: 2 },
+  // Provisioned and forgotten: never once used.
+  { identity: "legacy", asset: "billing", level: "WRITE", grantedDaysAgo: 910, usedDaysAgo: null },
+];
+
 const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
 async function main() {
@@ -149,7 +190,8 @@ async function main() {
   // reseeds -- deleteMany() would leave the sequences advanced, so every
   // reseed would shift every id and break any link the frontend had saved.
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "VendorRisk", "VendorAssetAccess", "Vendor", "Risk", "DataFlow", "AssetPHI", "Asset", "PHIType", "User" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "AccessGrant", "Identity", "VendorRisk", "VendorAssetAccess", "Vendor", ' +
+      '"Risk", "DataFlow", "AssetPHI", "Asset", "PHIType", "User" RESTART IDENTITY CASCADE',
   );
 
   const assetIds = new Map<string, number>();
@@ -253,6 +295,31 @@ async function main() {
     });
   }
 
+  const identityIds = new Map<string, number>();
+  for (const i of IDENTITIES) {
+    const created = await prisma.identity.create({
+      data: {
+        displayName: i.displayName, email: i.email, kind: i.kind,
+        department: i.department, role: i.role, active: i.active, mfaEnabled: i.mfaEnabled,
+      },
+    });
+    identityIds.set(i.key, created.id);
+  }
+
+  await prisma.accessGrant.createMany({
+    data: GRANTS.map((g) => {
+      const identityId = identityIds.get(g.identity);
+      if (identityId === undefined) throw new Error(`Unknown identity key: ${g.identity}`);
+      return {
+        identityId,
+        assetId: assetId(g.asset),
+        level: g.level,
+        grantedAt: daysAgo(g.grantedDaysAgo),
+        lastUsedAt: g.usedDaysAgo === null ? null : daysAgo(g.usedDaysAgo),
+      };
+    }),
+  });
+
   const [assets, phiTypes, links, flows, risks, users, vendors, vendorAccess, vendorRisks] =
     await Promise.all([
       prisma.asset.count(),
@@ -265,11 +332,15 @@ async function main() {
       prisma.vendorAssetAccess.count(),
       prisma.vendorRisk.count(),
     ]);
+  const [identities, grants] = await Promise.all([
+    prisma.identity.count(),
+    prisma.accessGrant.count(),
+  ]);
 
   console.log(
     `[seed] assets=${assets} phiTypes=${phiTypes} assetPHI=${links} dataFlows=${flows} ` +
       `risks=${risks} users=${users} vendors=${vendors} vendorAccess=${vendorAccess} ` +
-      `vendorRisks=${vendorRisks}`,
+      `vendorRisks=${vendorRisks} identities=${identities} accessGrants=${grants}`,
   );
 }
 

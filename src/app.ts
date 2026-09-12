@@ -6,6 +6,7 @@ import { authRouter } from "./routes/auth.js";
 import { dataFlowsRouter } from "./routes/dataflows.js";
 import { risksRouter } from "./routes/risks.js";
 import { vendorsRouter } from "./routes/vendors.js";
+import { accessRouter } from "./routes/access.js";
 import { requireAuth } from "./middleware/auth.js";
 import { createGlobalLimiter, createLoginLimiter } from "./middleware/security.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
@@ -50,6 +51,7 @@ export function createApp() {
   app.use("/api/dataflows", dataFlowsRouter);
   app.use("/api/risks", risksRouter);
   app.use("/api/vendors", vendorsRouter);
+  app.use("/api/access", accessRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
