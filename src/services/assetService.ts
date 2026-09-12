@@ -1,5 +1,6 @@
+import type { AssetType } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
-import { NotFoundError } from "../lib/errors.js";
+import { ConflictError, NotFoundError } from "../lib/errors.js";
 
 /** The most recent Risk row per asset is the asset's "current" risk. */
 const latestRisk = {
@@ -90,4 +91,38 @@ export async function getAssetById(id: number) {
       })),
     },
   };
+}
+
+export type AssetWriteInput = {
+  name: string;
+  type: AssetType;
+  phiVolume?: number;
+  encrypted?: boolean;
+  mfaEnabled?: boolean;
+  lastAssessedAt?: Date | null;
+};
+
+/**
+ * Creates an asset. Name is unique in the schema, so a duplicate surfaces as
+ * Prisma's P2002 -- translated to a 409 here rather than leaking as a 500,
+ * because "that name is taken" is a client problem, not a server fault.
+ */
+export async function createAsset(input: AssetWriteInput) {
+  const existing = await prisma.asset.findUnique({ where: { name: input.name } });
+  if (existing) throw new ConflictError(`An asset named "${input.name}" already exists`);
+
+  return prisma.asset.create({ data: input });
+}
+
+/** Partial update. Absent fields are left alone rather than nulled. */
+export async function updateAsset(id: number, input: Partial<AssetWriteInput>) {
+  const asset = await prisma.asset.findUnique({ where: { id } });
+  if (!asset) throw new NotFoundError(`Asset ${id} not found`);
+
+  if (input.name && input.name !== asset.name) {
+    const clash = await prisma.asset.findUnique({ where: { name: input.name } });
+    if (clash) throw new ConflictError(`An asset named "${input.name}" already exists`);
+  }
+
+  return prisma.asset.update({ where: { id }, data: input });
 }
