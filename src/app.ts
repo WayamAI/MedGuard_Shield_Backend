@@ -1,14 +1,28 @@
 import cors from "cors";
 import express from "express";
+import helmet from "helmet";
 import { assetsRouter } from "./routes/assets.js";
 import { authRouter } from "./routes/auth.js";
 import { dataFlowsRouter } from "./routes/dataflows.js";
 import { risksRouter } from "./routes/risks.js";
 import { requireAuth } from "./middleware/auth.js";
+import { createGlobalLimiter, createLoginLimiter } from "./middleware/security.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 
 export function createApp() {
   const app = express();
+
+  // Security headers first, so they are present on every response including
+  // errors and rate-limit rejections. contentSecurityPolicy is off because
+  // this process serves JSON only -- a CSP here would protect nothing while
+  // risking confusion with the frontend's own policy.
+  app.use(helmet({ contentSecurityPolicy: false }));
+
+  // Trust the first proxy hop so rate limiting keys on the real client IP
+  // rather than a load balancer's, once this sits behind one.
+  app.set("trust proxy", 1);
+
+  app.use(createGlobalLimiter());
 
   // The frontend dev server's origin, from env so nothing is hardcoded.
   // credentials:true is what lets the browser send the session cookie.
@@ -23,7 +37,9 @@ export function createApp() {
     res.json({ status: "ok" });
   });
 
-  // Public: you cannot present a token before you have one.
+  // Public: you cannot present a token before you have one. The login route
+  // carries its own much tighter limit on top of the global one.
+  app.use("/api/auth/login", createLoginLimiter());
   app.use("/api/auth", authRouter);
 
   // Everything past this line requires a valid session.
