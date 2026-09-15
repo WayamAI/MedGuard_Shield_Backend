@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, post-demo/expansion]
+    branches: [main]
   pull_request:
-    branches: [main, post-demo/expansion]
+    branches: [main]
 
 # A newer push to the same branch makes an in-flight run redundant.
 concurrency:
