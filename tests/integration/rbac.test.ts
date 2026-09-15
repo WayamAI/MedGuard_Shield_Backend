@@ -104,6 +104,50 @@ describe("PATCH /api/assets/:id — role gate", () => {
   });
 });
 
+describe("POST /api/risks/:assetId/recompute — role gate", () => {
+  it("allows ADMIN", async () => {
+    const res = await request(app)
+      .post(`/api/risks/${ids.ehrId}/recompute`)
+      .set("Authorization", `Bearer ${tokens.ADMIN}`);
+    expect(res.status).toBe(200);
+  });
+
+  it("allows ANALYST", async () => {
+    const res = await request(app)
+      .post(`/api/risks/${ids.ehrId}/recompute`)
+      .set("Authorization", `Bearer ${tokens.ANALYST}`);
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses VIEWER with 403 and names the required roles", async () => {
+    const res = await request(app)
+      .post(`/api/risks/${ids.ehrId}/recompute`)
+      .set("Authorization", `Bearer ${tokens.VIEWER}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN");
+    expect(res.body.error.message).toContain("ADMIN");
+  });
+
+  it("does not touch the stored risk when VIEWER is refused", async () => {
+    // The fixture scores the EHR asset 3/3/3/2; recompute is idempotent over
+    // unchanged inputs, so computedAt is the only field that would move.
+    const before = await prisma.risk.findFirst({ where: { assetId: ids.ehrId } });
+
+    await request(app)
+      .post(`/api/risks/${ids.ehrId}/recompute`)
+      .set("Authorization", `Bearer ${tokens.VIEWER}`);
+
+    const after = await prisma.risk.findFirst({ where: { assetId: ids.ehrId } });
+    expect(after?.computedAt).toEqual(before?.computedAt);
+  });
+
+  it("refuses an anonymous caller with 401, not 403", async () => {
+    const res = await request(app).post(`/api/risks/${ids.ehrId}/recompute`);
+    expect(res.status).toBe(401);
+  });
+});
+
 describe("write validation", () => {
   it("400s a missing name", async () => {
     const res = await request(app)
