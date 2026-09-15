@@ -1,9 +1,11 @@
 # Post-Demo Backlog
 
-> **Items 1, 2 and 3 are now closed** on `post-demo/expansion`: integration
-> tests, RBAC on writes, and rate limiting plus security headers all shipped.
-> They are kept below for the reasoning. Items 4 and 5 stand, and the new
-> deferrals are recorded at the end.
+> **All of the expansion work is merged into `main`** as of 2026-09-15, at
+> `575488f`. Items 1, 2, 3, 13 and 14 are closed — integration tests, RBAC on
+> writes, rate limiting plus security headers, live CI, and the risk-recompute
+> role gate. They are kept below for the reasoning.
+>
+> Still open: **4, 5, 6, 7, 8, 9, 10, 11, 12 and 15.**
 
 Known gaps recorded at the end of the demo build. **Nothing here blocks the demo** —
 it is all deliberately deferred, and captured so it is not rediscovered the hard way.
@@ -158,6 +160,10 @@ Granular RBAC means deciding what ANALYST may *not* do — probably deleting, an
 probably editing records outside their department. That needs a product answer
 before it needs code.
 
+Coverage is at least uniform now: every write path is gated the same way,
+including `POST /api/risks/:assetId/recompute`, which was the one that had
+been missed (item 14). The remaining gap is depth, not consistency.
+
 ## 8. No delete anywhere
 
 Create and update only. Deletion raises questions the demo did not need: soft
@@ -197,9 +203,45 @@ works on empty Postgres but fails on real data would pass CI.
 ## 13. ~~The CI workflow is parked, not active~~ — CLOSED
 
 Closed once the `workflow` OAuth scope was granted. `.github/workflows/ci.yml`
-is live and enforcing typecheck, lint and the full suite on push and PR to
-`main` and `post-demo/expansion`. First green run: 34699885907.
+is live and enforcing typecheck, lint and the full suite. First green run:
+34699885907; first green run on `main` itself: 34924544457.
 
-One follow-up left behind it: GitHub now warns that `actions/checkout@v4` and
-`actions/setup-node@v4` target Node.js 20, which is deprecated on runners and
-being forced onto Node 24. Harmless today, worth bumping to v5 when convenient.
+The follow-up it left behind is also closed: `actions/checkout` and
+`actions/setup-node` were bumped v4 → v5 in `e0850b3`, clearing GitHub's
+deprecated-Node-20 warning.
+
+Triggers were narrowed to `main` alone in `575488f`, once the expansion branch
+had merged. See item 15 for what that costs.
+
+## 14. ~~`POST /api/risks/:assetId/recompute` was an ungated write~~ — CLOSED
+
+Found during a full read of the codebase on 2026-09-15, not by a failing test —
+nothing had asserted the rule, so nothing broke when it was absent.
+
+The endpoint persists a new `score`, `band` and `computedAt` via
+`recomputeAssetRisk`, which makes it a write, but it sat behind `requireAuth`
+only. Any signed-in `VIEWER` could rescore any asset. Its exact twin,
+`POST /api/vendors/:id/recompute`, had been gated correctly all along — so this
+was an inconsistency, not a policy decision.
+
+Closed in `ec09811`: `requireRole(["ADMIN", "ANALYST"])` mounted ahead of
+`validate`, matching the ordering in `routes/vendors.ts`, plus five cases in
+`tests/integration/rbac.test.ts` covering ADMIN, ANALYST, VIEWER 403, anonymous
+401, and that a refused VIEWER leaves `computedAt` untouched.
+
+**The lesson worth keeping:** item 2 predicted the gate would be needed at "the
+first write endpoint" and listed "editing risk inputs" among them. Recompute is
+exactly that, and it still slipped through — because it was written as a route
+that *reads stored inputs*, which made it feel like a read. Any endpoint that
+ends in a `prisma.*.update` is a write regardless of where its inputs came from.
+
+## 15. `post-demo/expansion` is merged but has no CI coverage
+
+The remote branch is deliberately kept at `10a9cca` for reference, but
+`575488f` narrowed the workflow triggers to `main`, so a push to it now runs
+no checks at all.
+
+That is the right trade while it is dormant. **If the branch is ever revived,
+add it back to both the `push` and `pull_request` branch lists before pushing
+to it** — otherwise work lands there entirely unverified, which is worse than
+the stale trigger name that prompted the change.
