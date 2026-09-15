@@ -221,7 +221,7 @@ sets the four 1-5 values. Same gap exists for asset risk. The inputs are
 assessor judgement, so the write path probably wants a justification field and
 an audit record rather than a bare PATCH.
 
-## 12. CI does not run migrations against a clean database
+## 12. CI never tests a migration against a populated database
 
 The workflow runs `prisma migrate deploy` through `globalSetup` on a fresh
 service container each run, which does exercise the migration chain. It does not
