@@ -1,7 +1,7 @@
 // MedGuard — PHI risk-intelligence data model (demo scope).
 //
-// Deliberately minimal: no multi-tenancy, no vendor module. Every asset
-// belongs to the single demo organisation, so there is no orgId anywhere.
+// Deliberately minimal: no multi-tenancy. Every asset belongs to the single
+// demo organisation, so there is no orgId anywhere.
 
 generator client {
   provider = "prisma-client"
@@ -90,9 +90,12 @@ enum RiskBand {
 
 // ---------------------------------------------------------------- models
 
-/// Authentication is deferred to a later phase, so both credential columns are
-/// optional: a seeded demo user may carry neither. When auth lands, exactly one
-/// of passwordHash (local) or externalAuthId (Supabase/Clerk) gets populated.
+/// An account that can sign into MedGuard itself. Distinct from Identity,
+/// which is a person or service account that holds PHI access elsewhere.
+///
+/// Both credential columns stay optional because exactly one is ever
+/// populated: passwordHash for the local JWT auth that ships today, or
+/// externalAuthId if a hosted provider (Supabase/Clerk) is adopted later.
 model User {
   id             Int      @id @default(autoincrement())
   email          String   @unique
