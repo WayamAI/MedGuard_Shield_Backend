@@ -14,7 +14,16 @@ Ordered roughly by when it becomes urgent.
 
 ---
 
-## 1. No automated integration tests through Express
+## 1. ~~No automated integration tests through Express~~ — CLOSED
+
+Closed in `6587708`, which added supertest against `createApp()` over a real
+test database, exactly as prescribed below. The suite has grown with each
+module since: **113 tests across 9 files**, of which 101 are integration tests
+through the full Express stack. `tests/setup/globalSetup.ts` refuses to run
+against a database whose name lacks "test", because the fixtures truncate
+every table.
+
+The original note is kept below for the reasoning.
 
 Every route was verified by hand — curl and in-browser fetches, repeatedly — but the
 12 automated tests are unit tests over the pure functions only (`riskScoring`,
@@ -34,7 +43,15 @@ mount it without binding a port.
 
 ---
 
-## 2. `requireRole` is implemented but unused
+## 2. ~~`requireRole` is implemented but unused~~ — CLOSED
+
+Closed across three commits, in the order this note predicted: `ec724af`
+(asset create/update), `f1b0267` (vendor create/update/recompute), and
+`ec09811` (risk recompute — the one that was missed first time round, see
+item 14). Every write path is now gated; reads stay open to any signed-in
+role, as argued below.
+
+The original note is kept below for the reasoning.
 
 `requireRole(["ADMIN", "ANALYST"])` exists in `src/middleware/auth.ts`, is typed
 against the `Role` enum, and works — but no route calls it. Every current endpoint is
@@ -50,7 +67,18 @@ security theatre.
 
 ---
 
-## 3. No rate limiting or security headers
+## 3. ~~No rate limiting or security headers~~ — CLOSED
+
+Closed in `1fa580a`: `helmet` on every response including errors and 429s,
+plus two tiers of rate limiting in `src/middleware/security.ts` — a global
+300 per 15 min, and 10 per 15 min on `POST /api/auth/login` counting failures
+only, so a legitimate user signing in repeatedly is never locked out.
+
+The login throttling this note called most urgent is therefore in place. The
+limiters are factories rather than module-level singletons, so each app built
+in a process gets its own budget. Covered by `tests/integration/security.test.ts`.
+
+The original note is kept below for the reasoning.
 
 Not present: `helmet` (or equivalent security headers), rate limiting generally, and
 login-attempt throttling specifically. `POST /api/auth/login` will accept unlimited
