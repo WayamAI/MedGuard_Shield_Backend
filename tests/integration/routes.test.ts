@@ -208,3 +208,46 @@ describe("unmatched routes", () => {
     expect(res.body.error.stack).toBeUndefined();
   });
 });
+
+/**
+ * body-parser rejects an unreadable body before any route runs. Those are
+ * client mistakes and must not surface as 500s — a demo that fat-fingers a
+ * request should not look like the server fell over.
+ */
+describe("unreadable request bodies", () => {
+  it("400s malformed JSON rather than 500ing", async () => {
+    const res = await request(app)
+      .post("/api/assets")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Content-Type", "application/json")
+      .send('{"name": broken');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("MALFORMED_JSON");
+  });
+
+  it("413s an oversized body rather than 500ing", async () => {
+    const res = await request(app)
+      .post("/api/assets")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Content-Type", "application/json")
+      .send(`{"name":"${"A".repeat(200_000)}","type":"API"}`);
+
+    expect(res.status).toBe(413);
+    expect(res.body.error.code).toBe("PAYLOAD_TOO_LARGE");
+  });
+
+  /**
+   * The parse error carries the raw payload on `err.body`. Echoing it back
+   * would hand a malformed login attempt its own password in the response.
+   */
+  it("never echoes the rejected body back to the caller", async () => {
+    const res = await request(app)
+      .post("/api/auth/login")
+      .set("Content-Type", "application/json")
+      .send('{"email":"a@b.c","password":"hunter2-should-not-appear"');
+
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).not.toContain("hunter2");
+  });
+});
