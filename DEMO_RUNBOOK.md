@@ -85,6 +85,32 @@ If a process ignores a plain `kill`, escalate with `kill -9 <pid>`.
 
 **Re-run both `lsof` commands and confirm they are silent before continuing.**
 
+### Two traps worth knowing before you reach for a pattern kill
+
+**Killing by port is not the same as killing the process tree.** `npm run dev`
+starts three processes — `npm`, then `tsx watch`, then the `node` server that
+actually binds the port. Killing only the port holder leaves the `npm` and `tsx`
+parents alive, reparented to init, holding no socket. They are invisible to the
+`lsof` checks above, and they accumulate: a long testing session can leave a
+dozen. Harmless individually, but each one is a `tsx watch` that can respawn.
+
+To see them:
+
+```bash
+pgrep -fl "npm run dev|tsx watch"
+```
+
+**`npm run dev` is the dev command for the frontend too.** So this, the obvious
+cleanup, takes down the frontend on 8080 as well as the backend:
+
+```bash
+pkill -f "npm run dev"        # kills BOTH projects — rarely what you want
+```
+
+Prefer killing by port (the `lsof -t` idiom above) and then clearing leftover
+supervisors by explicit PID from `pgrep -fl`. If you do use a pattern kill,
+re-run step 4 afterwards and confirm the frontend is back on 8080.
+
 ---
 
 ## Step 2 — Confirm Postgres is up
@@ -271,6 +297,13 @@ psql -d medguard_dev -c 'SELECT COUNT(*) FROM "Identity";'       # expect 6
 
 Both are safe to run against `medguard_dev` — it holds nothing but seeded
 fixtures. Re-run step 5 afterwards.
+
+**Reseed on the day, not the night before.** Threat timestamps are seeded
+relative to the moment the seed runs — the lead alert is "4 hours ago", the
+next "9 hours ago". Seed the evening before and by demo time they read 20h and
+25h, which undercuts the "this just fired" framing of the threat feed. Access
+grant idle days drift the same way, though a day matters less at 243. A reseed
+takes about a second, so run one shortly before the call.
 
 > `npx prisma db seed` is exercised constantly and is known good.
 > `npx prisma migrate reset --force` is **documented but not exercised here**:
