@@ -8,6 +8,7 @@ import { risksRouter } from "./routes/risks.js";
 import { vendorsRouter } from "./routes/vendors.js";
 import { accessRouter } from "./routes/access.js";
 import { threatsRouter } from "./routes/threats.js";
+import { importRouter } from "./routes/import.js";
 import { requireAuth } from "./middleware/auth.js";
 import { createGlobalLimiter, createLoginLimiter } from "./middleware/security.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
@@ -54,6 +55,7 @@ export function createApp() {
   app.use("/api/vendors", vendorsRouter);
   app.use("/api/access", accessRouter);
   app.use("/api/threats", threatsRouter);
+  app.use("/api/import", importRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
