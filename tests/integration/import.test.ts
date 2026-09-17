@@ -319,6 +319,27 @@ describe("duplicate detection", () => {
     expect(await prisma.asset.count({ where: { name: "Twice" } })).toBe(0);
   });
 
+  /**
+   * Regression: row numbers used to be recomputed over the surviving rows, so
+   * one bad row early in the file shifted every later error up a line. The
+   * line number is the only part of the report a user can act on.
+   */
+  it("reports the true file line for a duplicate that follows a broken row", async () => {
+    const csv =
+      `${ASSET_HEADER}\n` +
+      "Fresh One,API,1,true,true,\n" +          // line 2, fine
+      "Broken,MAINFRAME,abc,maybe,true,\n" +    // line 3, unparseable
+      "Test EHR,API,5,true,true,\n";            // line 4, duplicate of seeded asset
+
+    const res = await doImport("assets", csv);
+    expect(res.status).toBe(400);
+
+    const errors = res.body.error.report.errors as Array<{ row: number; message: string }>;
+    const duplicate = errors.find((e) => e.message.includes("already exists"));
+    expect(duplicate?.row).toBe(4);
+    expect(errors.filter((e) => e.message.includes("must be")).every((e) => e.row === 3)).toBe(true);
+  });
+
   it("rejects an asset that already exists in the database", async () => {
     const csv = `${ASSET_HEADER}\nTest EHR,API,1,true,true,\n`;
     const res = await doImport("assets", csv);

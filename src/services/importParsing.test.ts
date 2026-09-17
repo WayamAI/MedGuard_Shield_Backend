@@ -93,6 +93,29 @@ describe("parseCsv — headers", () => {
     expect(errors[0]?.message).toBe("File contains no data rows");
   });
 
+  it.each([
+    ["CRLF throughout", "\r\n"],
+    ["LF throughout", "\n"],
+    ["CR throughout", "\r"],
+  ])("reads a file with %s", (_label, eol) => {
+    const csv = [ASSET_HEADER, "A,EHR,1,true,true,", "B,API,2,true,true,"].join(eol) + eol;
+    const { errors, rows } = parseCsv(assets, csv);
+    expect(errors).toEqual([]);
+    expect(rows).toHaveLength(2);
+  });
+
+  /**
+   * A template downloaded from the API is CRLF; rows appended in a text editor
+   * are usually LF. Auto-detection locks onto the first ending it sees and
+   * then merges every later line into one over-wide record.
+   */
+  it("reads a file whose header and rows use different line endings", () => {
+    const csv = `${ASSET_HEADER}\r\nA,EHR,1,true,true,\nB,API,2,true,true,\n`;
+    const { errors, rows } = parseCsv(assets, csv);
+    expect(errors).toEqual([]);
+    expect(rows.map((r) => r.name)).toEqual(["A", "B"]);
+  });
+
   it("tolerates a UTF-8 BOM, which Excel writes by default", () => {
     const { errors, rows } = parseCsv(assets, `\uFEFF${ASSET_HEADER}\nEpic,EHR,1,true,true,\n`);
     expect(errors).toEqual([]);
@@ -110,6 +133,40 @@ describe("parseCsv — row numbering", () => {
     const csv = `${ASSET_HEADER}\nA,EHR,1,true,true,\nB,API,1,true,true,\nC,NOPE,1,true,true,\n`;
     const { errors } = parseCsv(assets, csv);
     expect(errors[0]?.row).toBe(4);
+  });
+});
+
+describe("parseCsv — rowNumbers stay tied to the source line", () => {
+  it("reports the true line for rows that survive after an earlier row failed", () => {
+    const csv =
+      `${ASSET_HEADER}\n` +
+      "Good,API,1,true,true,\n" +      // line 2, kept
+      "Bad,MAINFRAME,1,true,true,\n" + // line 3, dropped
+      "Also Good,EHR,2,true,true,\n";  // line 4, kept
+    const { rows, rowNumbers } = parseCsv(assets, csv);
+
+    expect(rows.map((r) => r.name)).toEqual(["Good", "Also Good"]);
+    // Naively recomputing from the surviving index would give [2, 3] and send
+    // the user to the wrong line.
+    expect(rowNumbers).toEqual([2, 4]);
+  });
+
+  it("stays aligned when the dropped row is a duplicate rather than a type error", () => {
+    const csv =
+      `${ASSET_HEADER}\n` +
+      "A,API,1,true,true,\n" +  // line 2
+      "A,EHR,1,true,true,\n" +  // line 3, duplicate, dropped
+      "B,EHR,2,true,true,\n";   // line 4
+    const { rows, rowNumbers } = parseCsv(assets, csv);
+    expect(rows).toHaveLength(2);
+    expect(rowNumbers).toEqual([2, 4]);
+  });
+
+  it("is index-aligned with rows in the ordinary case", () => {
+    const csv = `${ASSET_HEADER}\nA,API,1,true,true,\nB,EHR,2,true,true,\n`;
+    const { rows, rowNumbers } = parseCsv(assets, csv);
+    expect(rowNumbers).toHaveLength(rows.length);
+    expect(rowNumbers).toEqual([2, 3]);
   });
 });
 

@@ -16,6 +16,13 @@ export type ParsedRow = Record<string, string | number | boolean | Date | null>;
 export type ParseOutcome = {
   errors: RowError[];
   rows: ParsedRow[];
+  /**
+   * Source line of each entry in `rows`, index-aligned. Carried explicitly
+   * because rows that fail coercion are dropped: recomputing the number from
+   * the surviving index shifts every later row up by however many were
+   * dropped before it, and misreports which line the user must go and fix.
+   */
+  rowNumbers: number[];
   totalRows: number;
 };
 
@@ -76,6 +83,12 @@ function readRecords(text: string): Record<string, string>[] {
       trim: true,
       bom: true,
       relax_column_count: false,
+      // All three endings, explicitly. Left to auto-detect, csv-parse locks
+      // onto whichever it meets first, so a file whose header came from one
+      // tool and whose rows came from another silently merges lines into one
+      // over-wide record. Real uploads are edited across Excel, Sheets and a
+      // text editor, so mixed endings are the norm, not the exception.
+      record_delimiter: ["\r\n", "\n", "\r"],
     }) as Record<string, string>[];
   } catch (err) {
     throw new CsvFormatError(err instanceof Error ? err.message : "Unreadable CSV");
@@ -209,22 +222,23 @@ export function parseCsv(spec: EntitySpec, text: string): ParseOutcome {
     records = readRecords(text);
   } catch (err) {
     const message = err instanceof CsvFormatError ? err.message : "Unreadable CSV";
-    return { errors: [{ row: 1, field: "file", message: `CSV could not be parsed: ${message}` }], rows: [], totalRows: 0 };
+    return { errors: [{ row: 1, field: "file", message: `CSV could not be parsed: ${message}` }], rows: [], rowNumbers: [], totalRows: 0 };
   }
 
   if (records.length === 0) {
-    return { errors: [{ row: 1, field: "file", message: "File contains no data rows" }], rows: [], totalRows: 0 };
+    return { errors: [{ row: 1, field: "file", message: "File contains no data rows" }], rows: [], rowNumbers: [], totalRows: 0 };
   }
 
   const header = Object.keys(records[0] ?? {});
   const headerIssues = headerErrors(spec, header);
   if (headerIssues.length > 0) {
     // Row-level checks against the wrong columns would be noise.
-    return { errors: headerIssues, rows: [], totalRows: records.length };
+    return { errors: headerIssues, rows: [], rowNumbers: [], totalRows: records.length };
   }
 
   const errors: RowError[] = [];
   const rows: ParsedRow[] = [];
+  const rowNumbers: number[] = [];
   const seenKeys = new Map<string, number>();
 
   records.forEach((record, index) => {
@@ -257,7 +271,8 @@ export function parseCsv(spec: EntitySpec, text: string): ParseOutcome {
 
     seenKeys.set(key, rowNumber);
     rows.push(parsed);
+    rowNumbers.push(rowNumber);
   });
 
-  return { errors, rows, totalRows: records.length };
+  return { errors, rows, rowNumbers, totalRows: records.length };
 }

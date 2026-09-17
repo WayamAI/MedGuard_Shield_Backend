@@ -76,7 +76,7 @@ async function resolveRefs(
   spec: EntitySpec,
   rows: ParsedRow[],
   rowNumbers: number[],
-): Promise<{ resolved: Record<string, unknown>[]; keptRowNumbers: number[]; errors: RowError[] }> {
+): Promise<{ resolved: Record<string, unknown>[]; keptIndices: number[]; errors: RowError[] }> {
   const indexes = new Map<RefTarget, Map<string, number>>();
   for (const target of refTargets(spec)) {
     indexes.set(target, await loadRefIndex(db, target));
@@ -84,7 +84,7 @@ async function resolveRefs(
 
   const errors: RowError[] = [];
   const resolved: Record<string, unknown>[] = [];
-  const keptRowNumbers: number[] = [];
+  const keptIndices: number[] = [];
 
   rows.forEach((row, i) => {
     const out: Record<string, unknown> = {};
@@ -125,11 +125,11 @@ async function resolveRefs(
 
     if (ok) {
       resolved.push(out);
-      keptRowNumbers.push(rowNumbers[i] ?? 0);
+      keptIndices.push(i);
     }
   });
 
-  return { resolved, keptRowNumbers, errors };
+  return { resolved, keptIndices, errors };
 }
 
 /**
@@ -148,7 +148,7 @@ async function existingRecordErrors(
     errors.push({
       row: rowNumbers[i] ?? 0,
       field: spec.naturalKey.join(" + "),
-      message: `A ${spec.model} with this ${spec.naturalKeyLabel} already exists (${label}). Import only adds new records.`,
+      message: `${spec.model} "${label}" already exists, matched on ${spec.naturalKeyLabel}. Import only adds new records.`,
     });
 
   switch (spec.slug) {
@@ -246,7 +246,6 @@ async function analyse(
   text: string,
 ): Promise<{ report: ImportReport; insertable: Record<string, unknown>[] }> {
   const parsed = parseCsv(spec, text);
-  const rowNumbers = parsed.rows.map((_, i) => i + 2);
 
   const empty = (errors: RowError[]): { report: ImportReport; insertable: Record<string, unknown>[] } => ({
     report: { valid: false, totalRows: parsed.totalRows, errors: errors.sort(byRowThenField), preview: [] },
@@ -255,8 +254,13 @@ async function analyse(
 
   if (parsed.errors.length > 0 && parsed.rows.length === 0) return empty(parsed.errors);
 
-  const { resolved, keptRowNumbers, errors: refErrors } = await resolveRefs(db, spec, parsed.rows, rowNumbers);
-  const keptOriginals = parsed.rows.filter((_, i) => keptRowNumbers.includes(rowNumbers[i] ?? -1));
+  const { resolved, keptIndices, errors: refErrors } =
+    await resolveRefs(db, spec, parsed.rows, parsed.rowNumbers);
+
+  // Index-aligned with `resolved`, so a duplicate found on the third surviving
+  // row still reports the line that row actually came from.
+  const keptRowNumbers = keptIndices.map((i) => parsed.rowNumbers[i] ?? 0);
+  const keptOriginals = keptIndices.map((i) => parsed.rows[i] ?? {});
 
   const dupErrors = await existingRecordErrors(db, spec, resolved, keptRowNumbers, keptOriginals);
   const errors = [...parsed.errors, ...refErrors, ...dupErrors].sort(byRowThenField);
