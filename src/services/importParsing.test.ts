@@ -94,7 +94,7 @@ describe("parseCsv — headers", () => {
   });
 
   it("tolerates a UTF-8 BOM, which Excel writes by default", () => {
-    const { errors, rows } = parseCsv(assets, `﻿${ASSET_HEADER}\nEpic,EHR,1,true,true,\n`);
+    const { errors, rows } = parseCsv(assets, `\uFEFF${ASSET_HEADER}\nEpic,EHR,1,true,true,\n`);
     expect(errors).toEqual([]);
     expect(rows[0]?.name).toBe("Epic");
   });
