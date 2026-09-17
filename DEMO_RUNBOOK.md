@@ -288,6 +288,23 @@ psql -d medguard_dev -c 'SELECT COUNT(*) FROM "Identity";'       # expect 6
 
 ---
 
+## Loading real data by CSV
+
+The demo data comes from `prisma/seed.ts`, which only a developer can edit.
+Alongside it there is now a CSV import pipeline a non-technical user can drive
+from the UI: download a template, fill it in, dry-run it, then commit. Seven
+entities are supported — assets, PHI types, data flows, vendors, access grants,
+threats and risks — one file each, `ADMIN` only, all-or-nothing per file.
+Foreign keys are written as names rather than database ids, so a data flow
+names its two assets. Full column specs, the natural key used for duplicate
+detection per entity, and a worked example are in **`IMPORT_GUIDE.md`**.
+
+It is not part of the go/no-go path and nothing in the demo depends on it. If
+you do import during a call, remember it writes into `medguard_dev` like
+anything else — `npx prisma db seed` puts the seeded estate back.
+
+---
+
 ## Data reset
 
 | Command | Use when |
