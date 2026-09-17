@@ -51,6 +51,12 @@ describe("authentication is enforced on every /api route", () => {
   it("health is deliberately outside the gate", async () => {
     expect((await request(app).get("/health")).status).toBe(200);
   });
+
+  it("health answers only GET — any other method is a structured 404", async () => {
+    const res = await request(app).delete("/health");
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("ROUTE_NOT_FOUND");
+  });
 });
 
 describe("GET /api/assets", () => {

@@ -150,6 +150,18 @@ describe("vendor writes follow the same RBAC rules as assets", () => {
     expect(res.status).toBe(409);
   });
 
+  it("404s a PATCH against an unknown vendor id", async () => {
+    const res = await request(app).patch("/api/vendors/999999")
+      .set("Authorization", `Bearer ${tokens.ADMIN}`).send({ baaStatus: "SIGNED" });
+    expect(res.status).toBe(404);
+  });
+
+  it("400s a PATCH with an empty body", async () => {
+    const res = await request(app).patch(`/api/vendors/${vendorId}`)
+      .set("Authorization", `Bearer ${tokens.ADMIN}`).send({});
+    expect(res.status).toBe(400);
+  });
+
   it("400s an invalid baaStatus", async () => {
     const res = await request(app).post("/api/vendors")
       .set("Authorization", `Bearer ${tokens.ADMIN}`)
@@ -194,5 +206,17 @@ describe("POST /api/vendors/:id/recompute", () => {
     const res = await request(app).post(`/api/vendors/${vendorId}/recompute`)
       .set("Authorization", `Bearer ${tokens.VIEWER}`);
     expect(res.status).toBe(403);
+  });
+
+  it("404s an unknown vendor id", async () => {
+    const res = await request(app).post("/api/vendors/999999/recompute")
+      .set("Authorization", `Bearer ${tokens.ADMIN}`);
+    expect(res.status).toBe(404);
+  });
+
+  it("400s a non-numeric vendor id", async () => {
+    const res = await request(app).post("/api/vendors/abc/recompute")
+      .set("Authorization", `Bearer ${tokens.ADMIN}`);
+    expect(res.status).toBe(400);
   });
 });

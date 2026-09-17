@@ -116,4 +116,20 @@ describe("POST /api/auth/logout", () => {
     expect(res.body.data).toEqual({ ok: true });
     expect(res.headers["set-cookie"]?.[0] ?? "").toContain("medguard_token=;");
   });
+  /**
+   * Logout has no genuine failure path: it is public, and clearing a cookie
+   * that is not there is not an error. These two pin that down as intended
+   * behaviour rather than an accident of routing.
+   */
+  it("is callable without a session, since a logged-out client still has a cookie to clear", async () => {
+    const res = await request(app).post("/api/auth/logout");
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ ok: true });
+  });
+
+  it("is idempotent — calling it twice is not an error", async () => {
+    await request(app).post("/api/auth/logout");
+    expect((await request(app).post("/api/auth/logout")).status).toBe(200);
+  });
+
 });

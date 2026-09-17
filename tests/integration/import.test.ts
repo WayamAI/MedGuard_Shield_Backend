@@ -101,6 +101,63 @@ describe("GET /api/import/:entity/template", () => {
   });
 });
 
+// ---------------------------------------------------------------- contract
+
+describe("GET /api/import", () => {
+  it("returns the column contract for all seven entities", async () => {
+    const res = await request(app)
+      .get("/api/import")
+      .set("Authorization", `Bearer ${tokens.ADMIN}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((e: { entity: string }) => e.entity)).toEqual([
+      "assets", "phi-types", "data-flows", "vendors", "access-grants", "threats", "risks",
+    ]);
+  });
+
+  it("describes each column well enough for a UI to build a form from it", async () => {
+    const res = await request(app)
+      .get("/api/import")
+      .set("Authorization", `Bearer ${tokens.ADMIN}`);
+
+    const assets = res.body.data.find((e: { entity: string }) => e.entity === "assets");
+    expect(assets).toMatchObject({ model: "Asset", naturalKey: ["name"] });
+
+    const type = assets.columns.find((c: { column: string }) => c.column === "type");
+    expect(type).toMatchObject({ type: "enum", required: true });
+    expect(type.values).toContain("CLOUD_STORAGE");
+
+    // Reference columns say which model they point at, so a UI can warn
+    // before upload rather than after.
+    const flows = res.body.data.find((e: { entity: string }) => e.entity === "data-flows");
+    const source = flows.columns.find((c: { column: string }) => c.column === "sourceAssetName");
+    expect(source.referencesModel).toBe("Asset");
+  });
+
+  it("never leaks a score or band column for risks", async () => {
+    const res = await request(app)
+      .get("/api/import")
+      .set("Authorization", `Bearer ${tokens.ADMIN}`);
+
+    const risks = res.body.data.find((e: { entity: string }) => e.entity === "risks");
+    const columns = risks.columns.map((c: { column: string }) => c.column);
+    expect(columns).not.toContain("score");
+    expect(columns).not.toContain("band");
+  });
+
+  it.each(["ANALYST", "VIEWER"] as const)("refuses %s with 403", async (role) => {
+    const res = await request(app)
+      .get("/api/import")
+      .set("Authorization", `Bearer ${tokens[role]}`);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN");
+  });
+
+  it("refuses an anonymous caller with 401", async () => {
+    expect((await request(app).get("/api/import")).status).toBe(401);
+  });
+});
+
 // ---------------------------------------------------------------- happy paths
 
 describe("happy path — every entity imports and is queryable afterward", () => {
