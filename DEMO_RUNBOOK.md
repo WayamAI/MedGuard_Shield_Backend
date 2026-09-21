@@ -303,6 +303,36 @@ It is not part of the go/no-go path and nothing in the demo depends on it. If
 you do import during a call, remember it writes into `medguard_dev` like
 anything else — `npx prisma db seed` puts the seeded estate back.
 
+### If you import an asset live: it will not appear in the Risk Register
+
+**An asset has no risk score until a risk assessment exists for it.** Import an
+asset and it shows up immediately in the Dashboard and the asset list with
+`risk: null` — and it is *absent* from the Risk Register and the risk matrix,
+because those are built from `Risk` rows and the new asset has none yet.
+
+This is the product behaving correctly, not a gap. Adding an asset by hand
+through the UI does exactly the same thing: creating an asset never invents an
+assessment for it. A score exists only because someone — or a Risk CSV — put
+one there.
+
+Say it out loud rather than letting the audience notice a blank cell:
+
+> "It is in the inventory straight away. It is not in the Risk Register yet,
+> because nobody has assessed it — same as if my analyst had added it by hand
+> this morning. Here is that assessment."
+
+Then import a one-row Risks CSV for it and it populates immediately:
+
+```csv
+assetName,likelihood,impact,exposure,controlGap
+Radiology PACS,4,4,4,3
+```
+
+That sequence is a better beat than avoiding the topic: it shows the inventory
+and the assessment are separate things, which is the argument the Risk Register
+exists to make. Score and band are always computed by the engine — there is no
+column in the CSV to supply them.
+
 ---
 
 ## Data reset
