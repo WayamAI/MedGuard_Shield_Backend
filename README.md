@@ -1,7 +1,27 @@
-# MedGuard Backend
+# Drishti Backend
 
-PHI risk-intelligence API for the MedGuard demo. Node + TypeScript + Express +
-Prisma + Postgres.
+**Drishti — Healthcare PHI Risk Intelligence Platform.**
+
+PHI risk-intelligence API. Node + TypeScript + Express + Prisma + Postgres.
+
+> **Naming.** The product was renamed from MedGuard to Drishti. Customer-facing
+> names (API title, logs, health response, docs) now say Drishti. Database
+> names (`medguard_dev`, `medguard_test`), the npm package name and the Git
+> remote deliberately still say MedGuard: renaming those is a coordinated
+> migration, not a find-and-replace, and nothing in the data model carries the
+> brand so there is no schema change waiting on it. The pre-rename session
+> cookie is still accepted so existing logins survive.
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [`FRONTEND_API_CONTRACT.md`](./FRONTEND_API_CONTRACT.md) | **Start here if you are building the client.** All 86 endpoints, breaking changes, demo walkthrough. |
+| [`API_REFERENCE.md`](./API_REFERENCE.md) | Per-endpoint reference with curl examples. |
+| [`IMPORT_GUIDE.md`](./IMPORT_GUIDE.md) | CSV import contracts. |
+| [`DEPLOYMENT.md`](./DEPLOYMENT.md) | Local, Docker, staging and production. |
+| [`DRISHTI_BACKEND_IMPLEMENTATION_REPORT.md`](./DRISHTI_BACKEND_IMPLEMENTATION_REPORT.md) | What changed in this build and what is still missing. |
+| [`CURRENT_BACKEND_STATE.md`](./CURRENT_BACKEND_STATE.md) | Forensic audit of the pre-Drishti backend. Historical. |
 
 ## Setup
 
@@ -55,8 +75,8 @@ npm run dev
 Expect:
 
 ```
-[medguard] API listening on http://localhost:4000
-[medguard] CORS origin: http://localhost:8080
+[drishti] API listening on http://localhost:4000
+[drishti] CORS origin: http://localhost:8080
 ```
 
 ### 3. Frontend — terminal 2
@@ -218,7 +238,7 @@ Identities (people and service accounts) and their grants on assets. Returns
 `{ summary, grants }`, worst-first.
 
 `Identity` is deliberately separate from `User`: `User` is an account that can
-log into MedGuard, while most identities holding PHI access never log into this
+log into Drishti, while most identities holding PHI access never log into this
 tool at all.
 
 Each grant carries a `flags` array rather than a single verdict, because the
@@ -269,7 +289,7 @@ curl -X POST http://localhost:4000/api/auth/login \
   -d '{"email":"admin@meridian.org","password":"<DEMO_USER_PASSWORD>"}'
 ```
 
-The token comes back in the response body *and* as an httpOnly `medguard_token`
+The token comes back in the response body *and* as an httpOnly `drishti_token`
 cookie, so a browser client can use `credentials: 'include'` and never touch the
 token itself, while a script client can send `Authorization: Bearer <token>`.
 `requireAuth` accepts either.

@@ -1,8 +1,8 @@
 {
   "name": "medguard-backend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "MedGuard PHI risk-intelligence API (demo scope)",
+  "description": "Drishti \u2014 Healthcare PHI Risk Intelligence Platform API",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
@@ -17,7 +17,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "test:integration": "vitest run tests/integration",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:deploy": "prisma migrate deploy",
+    "docker:build": "docker build -t drishti-api ."
   },
   "engines": {
     "node": ">=20"
