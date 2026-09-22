@@ -48,7 +48,10 @@ export function createApp() {
     .filter(Boolean);
   app.use(cors({ origin: origins, credentials: true }));
 
-  app.use(express.json({ limit: "1mb" }));
+  // Explicitly the body-parser default. JSON payloads here are small --
+  // imports arrive as multipart and are bounded separately by multer -- so a
+  // larger ceiling would widen the DoS surface for no functional gain.
+  app.use(express.json({ limit: "100kb" }));
 
   /**
    * Public. Health stays outside /api precisely so the auth gate below never

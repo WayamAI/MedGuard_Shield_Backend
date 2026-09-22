@@ -227,6 +227,195 @@ const THREATS: Array<{
   },
 ];
 
+
+/**
+ * Controls. Eight safeguards spanning every category, deliberately mixed in
+ * maturity so the control register shows real variation rather than a wall of
+ * green: two are effective, several partial, one planned and one not
+ * implemented at all.
+ *
+ * `frameworkRef` is a customer-style reference string. It is stored as a
+ * pointer and asserts no conformance -- see the Control model comment.
+ */
+const CONTROLS: Array<{
+  key: string; name: string; description: string;
+  category: "ACCESS" | "ENCRYPTION" | "MONITORING" | "GOVERNANCE" | "RESILIENCE" | "VENDOR";
+  status: "IMPLEMENTED" | "PARTIAL" | "PLANNED" | "NOT_IMPLEMENTED";
+  effectiveness: "EFFECTIVE" | "PARTIALLY_EFFECTIVE" | "INEFFECTIVE" | "NOT_ASSESSED";
+  owner: string; frameworkRef: string; reviewedDaysAgo: number | null;
+  assets: string[];
+}> = [
+  {
+    key: "mfa", name: "Multi-Factor Authentication",
+    description: "MFA required for all interactive access to systems holding PHI.",
+    category: "ACCESS", status: "PARTIAL", effectiveness: "PARTIALLY_EFFECTIVE",
+    owner: "Marcus Thompson", frameworkRef: "HIPAA 164.312(d)", reviewedDaysAgo: 45,
+    assets: ["portal", "pharmacy", "ehr", "lab"],
+  },
+  {
+    key: "encryption-rest", name: "Encryption at Rest",
+    description: "AES-256 encryption for all stored PHI, with keys held in a managed KMS.",
+    category: "ENCRYPTION", status: "IMPLEMENTED", effectiveness: "EFFECTIVE",
+    owner: "Marcus Thompson", frameworkRef: "HIPAA 164.312(a)(2)(iv)", reviewedDaysAgo: 30,
+    assets: ["portal", "pharmacy", "ehr", "lab", "imaging", "analytics"],
+  },
+  {
+    key: "encryption-transit", name: "Encryption in Transit",
+    description: "TLS 1.2+ enforced on every interface carrying PHI between systems.",
+    category: "ENCRYPTION", status: "PARTIAL", effectiveness: "PARTIALLY_EFFECTIVE",
+    owner: "Marcus Thompson", frameworkRef: "HIPAA 164.312(e)(1)", reviewedDaysAgo: 30,
+    assets: ["ehr", "lab", "imaging"],
+  },
+  {
+    key: "least-privilege", name: "Least Privilege Access",
+    description: "Access granted at the lowest level required, reviewed on role change.",
+    category: "ACCESS", status: "PARTIAL", effectiveness: "INEFFECTIVE",
+    owner: "Fatima Al-Rashid", frameworkRef: "HIPAA 164.308(a)(4)", reviewedDaysAgo: 120,
+    assets: ["billing", "insurance", "imaging"],
+  },
+  {
+    key: "access-review", name: "Quarterly Access Review",
+    description: "Every access grant reviewed and attested at least once per quarter.",
+    category: "GOVERNANCE", status: "PLANNED", effectiveness: "NOT_ASSESSED",
+    owner: "Fatima Al-Rashid", frameworkRef: "HIPAA 164.308(a)(3)(ii)(B)", reviewedDaysAgo: null,
+    assets: [],
+  },
+  {
+    key: "vendor-baa", name: "Vendor BAA Management",
+    description: "A signed Business Associate Agreement before any vendor touches PHI.",
+    category: "VENDOR", status: "PARTIAL", effectiveness: "INEFFECTIVE",
+    owner: "Fatima Al-Rashid", frameworkRef: "HIPAA 164.308(b)(1)", reviewedDaysAgo: 90,
+    assets: ["billing", "insurance", "imaging"],
+  },
+  {
+    key: "audit-logging", name: "Access Audit Logging",
+    description: "All PHI access logged with actor, timestamp and source address.",
+    category: "MONITORING", status: "IMPLEMENTED", effectiveness: "EFFECTIVE",
+    owner: "Marcus Thompson", frameworkRef: "HIPAA 164.312(b)", reviewedDaysAgo: 15,
+    assets: ["ehr", "billing", "insurance"],
+  },
+  {
+    key: "backup", name: "Encrypted Backup and Recovery",
+    description: "Daily encrypted backups with a tested quarterly restore.",
+    category: "RESILIENCE", status: "NOT_IMPLEMENTED", effectiveness: "NOT_ASSESSED",
+    owner: "Marcus Thompson", frameworkRef: "HIPAA 164.308(a)(7)", reviewedDaysAgo: null,
+    assets: [],
+  },
+];
+
+/** A small policy register, each backed by the controls that implement it. */
+const POLICIES: Array<{
+  name: string; description: string;
+  status: "DRAFT" | "ACTIVE" | "UNDER_REVIEW" | "ARCHIVED";
+  owner: string; evidenceRef: string | null; reviewDueInDays: number | null;
+  controls: string[];
+}> = [
+  {
+    name: "Information Access Management Policy",
+    description: "How access to systems holding PHI is requested, approved, reviewed and revoked.",
+    status: "ACTIVE", owner: "Fatima Al-Rashid",
+    evidenceRef: "policies/iam-v3.pdf", reviewDueInDays: 45,
+    controls: ["mfa", "least-privilege", "access-review"],
+  },
+  {
+    name: "Data Encryption Policy",
+    description: "Required encryption for PHI at rest and in transit, and key management.",
+    status: "ACTIVE", owner: "Marcus Thompson",
+    evidenceRef: "policies/encryption-v2.pdf", reviewDueInDays: 120,
+    controls: ["encryption-rest", "encryption-transit"],
+  },
+  {
+    name: "Third-Party Risk Management Policy",
+    description: "Due diligence, BAA execution and reassessment cadence for vendors touching PHI.",
+    status: "UNDER_REVIEW", owner: "Fatima Al-Rashid",
+    evidenceRef: null, reviewDueInDays: -14,
+    controls: ["vendor-baa"],
+  },
+  {
+    name: "Audit Controls Policy",
+    description: "What is logged, how long it is retained and who may read it.",
+    status: "DRAFT", owner: "Marcus Thompson",
+    evidenceRef: null, reviewDueInDays: null,
+    controls: ["audit-logging"],
+  },
+];
+
+/**
+ * Remediation, spanning every state a demonstration needs to show: an open
+ * critical finding, work in progress, something resolved, and a risk formally
+ * accepted rather than fixed.
+ *
+ * Each links to the record that surfaced it, so the finding can be traced back
+ * to its evidence rather than floating free.
+ */
+const REMEDIATIONS: Array<{
+  title: string; description: string; recommendation: string;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  status: "OPEN" | "IN_PROGRESS" | "RESOLVED" | "ACCEPTED" | "REOPENED";
+  source: "RISK" | "THREAT" | "ACCESS" | "VENDOR" | "CONTROL" | "MANUAL";
+  ownerEmail: string | null; dueInDays: number | null; resolvedDaysAgo: number | null;
+  asset?: string; vendorName?: string; threatTitle?: string; controlKey?: string;
+}> = [
+  {
+    title: "Billing Engine DB stores PHI unencrypted",
+    description:
+      "Billing Engine DB holds 87,100 PHI records with at-rest encryption disabled, and is the target of an unencrypted flow from Epic EHR Core.",
+    recommendation:
+      "Enable AES-256 at-rest encryption on the billing database and re-key the existing volume during the next maintenance window.",
+    severity: "CRITICAL", status: "OPEN", source: "RISK",
+    ownerEmail: "admin@meridian.org", dueInDays: 14, resolvedDaysAgo: null,
+    asset: "billing",
+  },
+  {
+    title: "Northwind Claims Processing has no signed BAA",
+    description:
+      "Northwind Claims Processing can reach two systems holding PHI and has never returned a signed Business Associate Agreement.",
+    recommendation:
+      "Suspend the vendor's access until a BAA is executed, or complete execution before the next claims cycle.",
+    severity: "CRITICAL", status: "IN_PROGRESS", source: "VENDOR",
+    ownerEmail: "f.alrashid@meridian.org", dueInDays: 7, resolvedDaysAgo: null,
+    vendorName: "Northwind Claims Processing",
+  },
+  {
+    title: "Contractor retains ADMIN access to Imaging Archive",
+    description:
+      "A deactivated contractor identity still holds ADMIN access to Imaging Archive (S3), last exercised over eight months ago.",
+    recommendation: "Revoke the grant and confirm no automation depends on the credential.",
+    severity: "HIGH", status: "OPEN", source: "ACCESS",
+    ownerEmail: "f.alrashid@meridian.org", dueInDays: 3, resolvedDaysAgo: null,
+    asset: "imaging",
+  },
+  {
+    title: "Tor exit node reached the claims gateway",
+    description:
+      "Insurance Claims Gateway accepted an authenticated session from a known Tor exit node. The gateway is internet-facing and unencrypted in transit.",
+    recommendation:
+      "Terminate the session, rotate the credential involved and place the gateway behind the IP allowlist.",
+    severity: "CRITICAL", status: "OPEN", source: "THREAT",
+    ownerEmail: "admin@meridian.org", dueInDays: 1, resolvedDaysAgo: null,
+    threatTitle: "Authenticated session from Tor exit node",
+  },
+  {
+    title: "MFA not enforced on Clinical Analytics Lake",
+    description:
+      "Clinical Analytics Lake holds 229,000 PHI records and does not require MFA for interactive access.",
+    recommendation: "Extend the MFA control to the analytics estate and verify coverage.",
+    severity: "HIGH", status: "RESOLVED", source: "CONTROL",
+    ownerEmail: "admin@meridian.org", dueInDays: null, resolvedDaysAgo: 5,
+    controlKey: "mfa",
+  },
+  {
+    title: "Legacy billing sync service account has never been used",
+    description:
+      "svc-legacy-billing-sync holds WRITE access to Billing Engine DB and has no recorded use since it was granted.",
+    recommendation:
+      "Retire the service account, or document the dependency that requires it to remain.",
+    severity: "MEDIUM", status: "ACCEPTED", source: "ACCESS",
+    ownerEmail: "f.alrashid@meridian.org", dueInDays: null, resolvedDaysAgo: 2,
+    asset: "billing",
+  },
+];
+
 const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000);
 
@@ -234,15 +423,32 @@ async function main() {
   // Idempotent, and RESTART IDENTITY keeps primary keys stable across
   // reseeds -- deleteMany() would leave the sequences advanced, so every
   // reseed would shift every id and break any link the frontend had saved.
+  // Idempotent, and RESTART IDENTITY keeps primary keys stable across reseeds.
+  //
+  // Organization is deliberately NOT truncated. It is created by the platform
+  // migration and everything else hangs off it; dropping and recreating it on
+  // every reseed would renumber the tenant and orphan any saved link. It is
+  // upserted below instead.
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "Threat", "AccessGrant", "Identity", "VendorRisk", "VendorAssetAccess", ' +
-      '"Vendor", "Risk", "DataFlow", "AssetPHI", "Asset", "PHIType", "User" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "AuditEvent", "RiskHistory", "Remediation", "PolicyControl", "Policy", ' +
+      '"AssetControl", "Control", "RefreshToken", "Threat", "AccessGrant", "Identity", ' +
+      '"VendorRisk", "VendorAssetAccess", "Vendor", "Risk", "DataFlow", "AssetPHI", ' +
+      '"Asset", "PHIType", "OrganizationMember", "User" RESTART IDENTITY CASCADE',
   );
+
+  // The founding organisation. Upserted so a reseed reuses the same id.
+  const org = await prisma.organization.upsert({
+    where: { slug: "meridian" },
+    update: {},
+    create: { name: "Meridian Health System", slug: "meridian" },
+  });
+  const organizationId = org.id;
 
   const assetIds = new Map<string, number>();
   for (const a of ASSETS) {
     const created = await prisma.asset.create({
       data: {
+        organizationId,
         name: a.name,
         type: a.type,
         phiVolume: a.phiVolume,
@@ -257,7 +463,7 @@ async function main() {
   const phiTypeIds = new Map<string, number>();
   for (const p of PHI_TYPES) {
     const created = await prisma.pHIType.create({
-      data: { name: p.name, sensitivity: p.sensitivity },
+      data: { organizationId, name: p.name, sensitivity: p.sensitivity },
     });
     phiTypeIds.set(p.key, created.id);
   }
@@ -283,6 +489,7 @@ async function main() {
 
   await prisma.dataFlow.createMany({
     data: FLOWS.map((f) => ({
+      organizationId,
       sourceAssetId: assetId(f.source),
       targetAssetId: assetId(f.target),
       phiTypeId: phiTypeId(f.phiType),
@@ -295,6 +502,7 @@ async function main() {
     data: RISK_INPUTS.map((r) => {
       const { score, band } = computeRisk(r.likelihood, r.impact, r.exposure, r.controlGap);
       return {
+        organizationId,
         assetId: assetId(r.asset),
         likelihood: r.likelihood,
         impact: r.impact,
@@ -315,9 +523,17 @@ async function main() {
     data: USERS.map((u) => ({ ...u, passwordHash })),
   });
 
+  // Membership is what actually governs authorisation; User.role is only the
+  // account default. Seeded with the same role so the two agree.
+  const seededUsers = await prisma.user.findMany({ select: { id: true, role: true } });
+  await prisma.organizationMember.createMany({
+    data: seededUsers.map((u) => ({ userId: u.id, organizationId, role: u.role })),
+  });
+
   for (const v of VENDORS) {
     const vendor = await prisma.vendor.create({
       data: {
+        organizationId,
         name: v.name,
         baaStatus: v.baaStatus,
         phiVolume: v.phiVolume,
@@ -332,6 +548,7 @@ async function main() {
     const { score, band } = computeRisk(v.likelihood, v.impact, v.exposure, v.controlGap);
     await prisma.vendorRisk.create({
       data: {
+        organizationId,
         vendorId: vendor.id,
         likelihood: v.likelihood, impact: v.impact,
         exposure: v.exposure, controlGap: v.controlGap,
@@ -344,6 +561,7 @@ async function main() {
   for (const i of IDENTITIES) {
     const created = await prisma.identity.create({
       data: {
+        organizationId,
         displayName: i.displayName, email: i.email, kind: i.kind,
         department: i.department, role: i.role, active: i.active, mfaEnabled: i.mfaEnabled,
       },
@@ -356,6 +574,7 @@ async function main() {
       const identityId = identityIds.get(g.identity);
       if (identityId === undefined) throw new Error(`Unknown identity key: ${g.identity}`);
       return {
+        organizationId,
         identityId,
         assetId: assetId(g.asset),
         level: g.level,
@@ -367,6 +586,7 @@ async function main() {
 
   await prisma.threat.createMany({
     data: THREATS.map((t) => ({
+      organizationId,
       assetId: assetId(t.asset),
       severity: t.severity,
       status: t.status,
@@ -374,6 +594,102 @@ async function main() {
       description: t.description,
       detectedAt: hoursAgo(t.hoursAgo),
       resolvedAt: t.resolvedHoursAgo === null ? null : hoursAgo(t.resolvedHoursAgo),
+    })),
+  });
+
+
+  // ---------------------------------------------------------------- controls
+  const controlIds = new Map<string, number>();
+  for (const c of CONTROLS) {
+    const created = await prisma.control.create({
+      data: {
+        organizationId,
+        name: c.name, description: c.description, category: c.category,
+        status: c.status, effectiveness: c.effectiveness,
+        owner: c.owner, frameworkRef: c.frameworkRef,
+        lastReviewedAt: c.reviewedDaysAgo === null ? null : daysAgo(c.reviewedDaysAgo),
+      },
+    });
+    controlIds.set(c.key, created.id);
+
+    if (c.assets.length > 0) {
+      await prisma.assetControl.createMany({
+        data: c.assets.map((key) => ({ assetId: assetId(key), controlId: created.id })),
+      });
+    }
+  }
+
+  const controlId = (key: string) => {
+    const id = controlIds.get(key);
+    if (id === undefined) throw new Error(`Unknown control key in seed: ${key}`);
+    return id;
+  };
+
+  // ---------------------------------------------------------------- policies
+  for (const p of POLICIES) {
+    const created = await prisma.policy.create({
+      data: {
+        organizationId,
+        name: p.name, description: p.description, status: p.status,
+        owner: p.owner, evidenceRef: p.evidenceRef,
+        reviewDueAt: p.reviewDueInDays === null ? null : daysAgo(-p.reviewDueInDays),
+      },
+    });
+    await prisma.policyControl.createMany({
+      data: p.controls.map((key) => ({ policyId: created.id, controlId: controlId(key) })),
+    });
+  }
+
+  // ------------------------------------------------------------- remediation
+  const userByEmail = new Map(
+    (await prisma.user.findMany({ select: { id: true, email: true } })).map((u) => [u.email, u.id]),
+  );
+  const vendorByName = new Map(
+    (await prisma.vendor.findMany({ select: { id: true, name: true } })).map((v) => [v.name, v.id]),
+  );
+  const threatByTitle = new Map(
+    (await prisma.threat.findMany({ select: { id: true, title: true } })).map((t) => [t.title, t.id]),
+  );
+
+  for (const r of REMEDIATIONS) {
+    await prisma.remediation.create({
+      data: {
+        organizationId,
+        title: r.title, description: r.description, recommendation: r.recommendation,
+        severity: r.severity, status: r.status, source: r.source,
+        ownerId: r.ownerEmail ? userByEmail.get(r.ownerEmail) ?? null : null,
+        dueAt: r.dueInDays === null ? null : daysAgo(-r.dueInDays),
+        resolvedAt: r.resolvedDaysAgo === null ? null : daysAgo(r.resolvedDaysAgo),
+        assetId: r.asset ? assetId(r.asset) : null,
+        vendorId: r.vendorName ? vendorByName.get(r.vendorName) ?? null : null,
+        threatId: r.threatTitle ? threatByTitle.get(r.threatTitle) ?? null : null,
+        controlId: r.controlKey ? controlId(r.controlKey) : null,
+      },
+    });
+  }
+
+  // ------------------------------------------------------------ risk history
+  //
+  // One history row per seeded assessment, so a fresh database still has a
+  // trail rather than an empty History tab. previousScore is null because
+  // these *are* the first assessments -- inventing an earlier score to make
+  // the chart look busier would be fabricating data.
+  const seededRisks = await prisma.risk.findMany();
+  await prisma.riskHistory.createMany({
+    data: seededRisks.map((risk) => ({
+      organizationId,
+      riskId: risk.id,
+      assetId: risk.assetId,
+      previousScore: null,
+      previousBand: null,
+      score: risk.score,
+      band: risk.band,
+      likelihood: risk.likelihood,
+      impact: risk.impact,
+      exposure: risk.exposure,
+      controlGap: risk.controlGap,
+      reason: "INITIAL_ASSESSMENT" as const,
+      changedById: null,
     })),
   });
 

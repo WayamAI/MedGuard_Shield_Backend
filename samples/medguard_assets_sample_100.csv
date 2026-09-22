@@ -1,0 +1,101 @@
+name,type,phiVolume,encrypted,mfaEnabled,lastAssessedAt
+Redwood Analytics Hub,EHR,2753,true,true,2026-09-03
+Oakmont Scheduling Engine,Lab System,744,true,false,2026-04-23
+Redwood Imaging Viewer,Identity Provider,285514,true,true,2026-03-23
+Wellspring Data Lake,Telehealth Platform,19110,false,true,2026-06-28
+Riverside Document Store,Telehealth Platform,855,true,true,2026-09-10
+Southport Claims Processor,File Server,150814,false,true,2026-05-03
+Glenmoor Dispensing API,Analytics Platform,287717,true,false,2026-06-07
+Marshfield Telehealth Connect,Billing System,1901,true,true,2026-09-08
+Marshfield Data Lake,Lab System,7103,true,false,2026-06-07
+Redwood Device Hub,Messaging System,4258,true,true,2026-05-24
+Fairview Mail Relay,Messaging System,122525,true,true,2026-02-05
+Redwood API Bridge,Scheduling System,250078,true,true,2026-09-28
+Meridian Referral Engine,Analytics Platform,452967,true,true,2026-03-15
+Meridian Care Coordination Platform,Telehealth Platform,4600,true,true,2026-09-20
+Crestline Storage Vault,AI Model,458224,true,true,2026-08-01
+Cascade Revenue Cycle System,AI Model,3019,true,true,2026-02-24
+Cedarpoint Insurance Verification API,Billing System,117314,true,true,2026-05-17
+Glenmoor Document Store,Scheduling System,445976,true,true,2026-07-22
+Redwood Diagnostic AI,Patient Portal,4739,true,true,2026-09-08
+Oakmont Dispensing API,EHR,1081,false,false,2026-06-03
+Ashford Dispensing API,Telehealth Platform,4476,true,true,2026-08-08
+Northfield Device Hub,Scheduling System,100819,true,true,2026-08-28
+Westgate Lab Interface,Analytics Platform,31386,true,false,2026-04-07
+Pinecrest Patient Portal,Cloud Storage,17025,true,true,2026-08-26
+Glenmoor Clinical Notes Service,Identity Provider,391911,true,true,2026-04-06
+Wellspring Device Hub,Device Integration,2251,true,true,2026-05-26
+Northfield Patient Portal,CRM,397011,true,false,2026-04-02
+Oakmont Care Coordination Platform,Identity Provider,999,true,true,2026-09-06
+Northbridge Backup Node,Billing System,2022,true,true,2026-02-19
+Ironwood Mail Relay,File Server,45591,true,true,2026-06-09
+Crestline Referral Engine,Data Warehouse,2455,true,true,2026-06-25
+Brookhaven Billing Gateway,EHR,4254,false,true,2026-05-05
+Brookhaven Diagnostic AI,Billing System,2501,true,true,2026-05-20
+Northfield Claims Processor,Backup System,478397,true,true,2026-03-09
+Cascade Appointment Sync,Analytics Platform,197721,true,true,2026-05-17
+Cedarpoint Telehealth Connect,Lab System,46568,false,true,2026-03-21
+Bluewater API Bridge,Patient Portal,4003,false,true,2026-03-18
+Northbridge Insurance Verification API,AI Model,1713,true,true,2026-01-12
+Ironwood Referral Engine,Analytics Platform,263058,true,true,2026-04-28
+Lakeside Remote Monitoring Hub,API Gateway,144036,true,true,2026-07-26
+Marshfield Clinical Notes Service,Pharmacy System,462811,false,true,2026-08-08
+Crestline Insurance Verification API,Patient Portal,3364,true,true,2026-07-11
+Bluewater Clinical Notes Service,Billing System,386321,true,true,2026-09-11
+Meridian Analytics Hub,Telehealth Platform,1962,false,true,2026-06-14
+Silverleaf Backup Node,Analytics Platform,42787,false,true,2026-09-26
+Pinecrest Referral Engine,Imaging System,86686,true,true,2026-02-24
+Fairview Patient CRM,Backup System,48705,true,true,2026-03-07
+Wellspring Referral Engine,Messaging System,45338,true,true,2026-05-10
+Crestline Scheduling Engine,Email System,35473,true,true,2026-03-22
+Summit Patient CRM,Backup System,3245,true,true,2026-04-05
+Meridian Lab Interface,Pharmacy System,4392,true,true,2026-04-23
+Clearview Messaging Bus,Device Integration,127369,true,true,2026-02-25
+Wellspring Dispensing API,API Gateway,76328,true,true,2026-08-05
+Marshfield Backup Node,Identity Provider,371206,true,true,2026-09-15
+Fairview API Bridge,Device Integration,4186,true,true,2026-09-16
+Redwood Dispensing API,Telehealth Platform,10077,true,true,2026-09-03
+Harborview Storage Vault,Pharmacy System,3637,false,true,2026-09-15
+Wellspring Lab Interface,Imaging System,453594,true,false,2026-07-16
+Meridian Diagnostic AI,CRM,332182,true,true,2026-04-16
+Ironwood Telehealth Connect,Scheduling System,6902,true,true,2026-03-27
+Brightline Revenue Cycle System,Cloud Storage,256580,true,false,2026-07-05
+Glenmoor Patient Portal,API Gateway,22049,true,true,2026-07-09
+Eastbrook Insurance Verification API,Scheduling System,2566,true,false,2026-06-08
+Redwood Billing Gateway,Lab System,754,true,true,2026-08-22
+Cascade Mail Relay,Imaging System,21793,true,true,2026-02-25
+Southport API Bridge,CRM,42924,true,true,2026-07-13
+Clearview PACS Archive,Billing System,11678,true,true,2026-02-26
+Oakmont Remote Monitoring Hub,Lab System,274593,true,true,2026-06-01
+Glenmoor Scheduling Engine,Device Integration,239890,true,true,2026-03-14
+Lakeside Care Coordination Platform,Backup System,473729,true,true,2026-05-11
+Southport Revenue Cycle System,Billing System,34543,true,true,2026-06-01
+Cedarpoint Clinical Notes Service,Data Warehouse,36952,true,true,2026-05-18
+Meridian Backup Node,Imaging System,20817,true,true,2026-08-21
+Clearview Device Hub,Patient Portal,641,true,true,2026-06-16
+Pinecrest Backup Node,AI Model,41070,true,true,2026-05-08
+Cascade Care Coordination Platform,Imaging System,439483,true,true,2026-04-07
+Westgate Device Hub,Telehealth Platform,4797,true,true,2026-06-06
+Fieldstone EHR Core,Identity Provider,1536,true,true,2026-03-21
+Glenmoor Genomics Pipeline,Device Integration,5803,true,true,2026-03-02
+Cedarpoint Analytics Hub,Billing System,88840,true,false,2026-03-26
+Oakmont Patient CRM,Billing System,12762,true,true,2026-04-25
+Ashford Messaging Bus,Patient Portal,24487,true,true,2026-02-25
+Crestline Claims Processor,Imaging System,2667,true,true,2026-03-01
+Wellspring Patient Portal,File Server,4349,true,true,2026-08-03
+Marshfield Dispensing API,Telehealth Platform,110175,true,false,2026-05-27
+Harborview Billing Gateway,Lab System,361974,true,true,2026-08-04
+Brightline Imaging Viewer,CRM,312391,true,false,2026-01-14
+Westgate Data Lake,File Server,2551,true,true,2026-01-25
+Marshfield Insurance Verification API,Telehealth Platform,296677,true,true,2026-03-19
+Wellspring Claims Processor,Device Integration,35802,true,true,2026-03-11
+Wellspring Imaging Viewer,Device Integration,259952,false,false,2026-05-11
+Cascade Genomics Pipeline,Messaging System,394803,true,false,2026-09-12
+Silverleaf Genomics Pipeline,Device Integration,8382,true,true,2026-08-23
+Meridian Claims Processor,File Server,212922,false,true,2026-04-27
+Brookhaven Analytics Hub,Patient Portal,1462,true,true,2026-09-23
+Bluewater Scheduling Engine,Device Integration,289487,false,false,2026-09-24
+Fairview Storage Vault,Billing System,228192,true,false,2026-05-27
+Oakmont Mail Relay,Device Integration,34264,true,true,2026-09-13
+Highland Clinical Notes Service,Imaging System,2456,true,true,2026-06-24
+Cedarpoint Imaging Viewer,Messaging System,465442,true,true,2026-01-05

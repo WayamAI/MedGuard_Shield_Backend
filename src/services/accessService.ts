@@ -17,13 +17,21 @@ import { scope, type TenantContext } from "../lib/tenant.js";
 
 export const STALE_AFTER_DAYS = 90;
 
+/**
+ * Each flag describes something wrong with the grant itself.
+ *
+ * "Never reviewed" is deliberately NOT one of them. Review status is a
+ * property of our process, not of the access, and a flag that fires on every
+ * row of a fresh estate would drown the four that mean something -- this list
+ * is what `riskFlagCount` sorts by. `lastReviewedAt` is returned on every row
+ * and counted separately in the summary, so the UI can still surface it.
+ */
 export type GrantFlag =
   | "STALE"
   | "NEVER_USED"
   | "NO_MFA"
   | "INACTIVE_IDENTITY"
-  | "EXCESSIVE_LEVEL"
-  | "NEVER_REVIEWED";
+  | "EXCESSIVE_LEVEL";
 
 /** An asset above this PHI volume makes non-READ access worth flagging. */
 const HIGH_VOLUME_THRESHOLD = 50_000;
@@ -34,7 +42,6 @@ function daysBetween(from: Date, to: Date): number {
 
 type FlagInput = {
   lastUsedAt: Date | null;
-  lastReviewedAt: Date | null;
   level: AccessLevel;
   identity: { active: boolean; kind: string; mfaEnabled: boolean };
   asset: { phiVolume: number };
@@ -57,8 +64,6 @@ export function flagsFor(grant: FlagInput): GrantFlag[] {
   if (grant.level !== "READ" && grant.asset.phiVolume > HIGH_VOLUME_THRESHOLD) {
     flags.push("EXCESSIVE_LEVEL");
   }
-
-  if (grant.lastReviewedAt === null) flags.push("NEVER_REVIEWED");
 
   return flags;
 }
@@ -163,7 +168,7 @@ export async function listAccessGrants(
   return { items: shaped, total, summary: summarise(shaped) };
 }
 
-type Shaped = { flags: GrantFlag[] };
+type Shaped = { flags: GrantFlag[]; lastReviewedAt: Date | null };
 
 /**
  * Summary over the rows on this page. Documented as such because it is easy to
@@ -179,7 +184,7 @@ function summarise(rows: Shaped[]) {
     withoutMfa: rows.filter((r) => r.flags.includes("NO_MFA")).length,
     inactiveIdentities: rows.filter((r) => r.flags.includes("INACTIVE_IDENTITY")).length,
     excessiveLevel: rows.filter((r) => r.flags.includes("EXCESSIVE_LEVEL")).length,
-    neverReviewed: rows.filter((r) => r.flags.includes("NEVER_REVIEWED")).length,
+    neverReviewed: rows.filter((r) => r.lastReviewedAt === null).length,
     staleAfterDays: STALE_AFTER_DAYS,
   };
 }
@@ -194,7 +199,7 @@ export async function accessSummary(ctx: TenantContext) {
     },
   });
 
-  return summarise(rows.map((g) => ({ flags: flagsFor(g) })));
+  return summarise(rows.map((g) => ({ flags: flagsFor(g), lastReviewedAt: g.lastReviewedAt })));
 }
 
 export async function getAccessGrantById(ctx: TenantContext, id: number) {

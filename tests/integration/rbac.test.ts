@@ -61,7 +61,7 @@ describe("POST /api/assets — role gate", () => {
       .set("Authorization", `Bearer ${tokens.VIEWER}`)
       .send(newAsset("Should Not Exist"));
 
-    expect(await prisma.asset.findUnique({ where: { name: "Should Not Exist" } })).toBeNull();
+    expect(await prisma.asset.findFirst({ where: { name: "Should Not Exist" } })).toBeNull();
   });
 
   it("refuses an anonymous caller with 401, not 403", async () => {

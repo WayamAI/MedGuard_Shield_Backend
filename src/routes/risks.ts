@@ -5,7 +5,9 @@ import { ctxOf } from "../middleware/auth.js";
 import { ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { listRisks, riskDistribution } from "../services/riskService.js";
-import { listRiskHistory } from "../services/riskEngine.js";
+import { listRiskHistory, recomputeAssetRisk } from "../services/riskEngine.js";
+import { requireRole } from "../middleware/auth.js";
+import { recordAudit } from "../services/auditService.js";
 
 export const risksRouter = Router();
 
@@ -52,3 +54,37 @@ risksRouter.get("/history", validate({ query: paginationQuery }), async (req, re
     next(err);
   }
 });
+
+/**
+ * Backwards-compatible alias for POST /api/assets/:assetId/recompute.
+ *
+ * Risk writes now live on the asset they belong to, but this path shipped and
+ * the frontend calls it. Kept working rather than broken, and documented as
+ * deprecated in FRONTEND_API_CONTRACT.md so there is a date on which it can go.
+ */
+const assetIdParam = z.object({ assetId: z.coerce.number().int().positive() });
+
+risksRouter.post(
+  "/:assetId/recompute",
+  requireRole(["ADMIN", "ANALYST"]),
+  validate({ params: assetIdParam }),
+  async (req, res, next) => {
+    try {
+      const ctx = ctxOf(req);
+      const { assetId } = assetIdParam.parse(req.params);
+      const snapshot = await recomputeAssetRisk(ctx, assetId);
+
+      await recordAudit(ctx, {
+        action: "RISK_RECOMPUTED",
+        entityType: "Asset",
+        entityId: assetId,
+        metadata: { score: snapshot.score, band: snapshot.band, via: "deprecated-alias" },
+        req,
+      });
+
+      ok(res, snapshot);
+    } catch (err) {
+      next(err);
+    }
+  },
+);

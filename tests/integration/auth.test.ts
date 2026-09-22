@@ -18,7 +18,7 @@ describe("GET /health", () => {
   it("is public and reports ok", async () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: "ok" });
+    expect(res.body).toMatchObject({ status: "ok", service: "drishti-api" });
   });
 });
 
@@ -30,7 +30,7 @@ describe("POST /api/auth/login", () => {
 
     expect(res.status).toBe(200);
     expect(typeof res.body.data.token).toBe("string");
-    expect(res.body.data.expiresIn).toBe(28800);
+    expect(res.body.data.expiresIn).toBe(3600);
     expect(res.body.data.user).toMatchObject({ email: "admin@test.local", role: "ADMIN" });
   });
 
@@ -40,7 +40,7 @@ describe("POST /api/auth/login", () => {
       .send({ email: "admin@test.local", password: TEST_PASSWORD });
 
     const cookie = res.headers["set-cookie"]?.[0] ?? "";
-    expect(cookie).toContain("medguard_token=");
+    expect(cookie).toContain("drishti_token=");
     expect(cookie).toContain("HttpOnly");
   });
 
@@ -114,7 +114,7 @@ describe("POST /api/auth/logout", () => {
     const res = await request(app).post("/api/auth/logout");
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ ok: true });
-    expect(res.headers["set-cookie"]?.[0] ?? "").toContain("medguard_token=;");
+    expect(res.headers["set-cookie"]?.[0] ?? "").toContain("drishti_token=;");
   });
   /**
    * Logout has no genuine failure path: it is public, and clearing a cookie

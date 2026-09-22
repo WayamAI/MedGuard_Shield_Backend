@@ -29,14 +29,14 @@ beforeEach(async () => {
   };
 
   const unscored = await prisma.asset.create({
-    data: { name: "Unscored Asset", type: "API", phiVolume: 10 },
+    data: { organizationId: ids.organizationId, name: "Unscored Asset", type: "API", phiVolume: 10 },
   });
   unscoredAssetId = unscored.id;
 
   await prisma.identity.createMany({
     data: [
-      { displayName: "Grace Okafor", email: "g.okafor@test.local", kind: "USER", role: "ANALYST" },
-      { displayName: "svc-import-test", kind: "SERVICE_ACCOUNT", role: "ANALYST" },
+      { organizationId: ids.organizationId, displayName: "Grace Okafor", email: "g.okafor@test.local", kind: "USER", role: "ANALYST" },
+      { organizationId: ids.organizationId, displayName: "svc-import-test", kind: "SERVICE_ACCOUNT", role: "ANALYST" },
     ],
   });
 });
@@ -77,7 +77,7 @@ describe("GET /api/import/:entity/template", () => {
 
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toContain("text/csv");
-    expect(res.headers["content-disposition"]).toContain(`medguard-${entity}-template.csv`);
+    expect(res.headers["content-disposition"]).toContain(`drishti-${entity}-template.csv`);
     expect(res.text.trim().split("\r\n")).toHaveLength(2);
   });
 
@@ -173,14 +173,14 @@ describe("happy path — every entity imports and is queryable afterward", () =>
     expect(res.status).toBe(201);
     expect(res.body.data.imported).toBe(2);
 
-    const created = await prisma.asset.findUnique({ where: { name: "Imported Portal" } });
+    const created = await prisma.asset.findFirst({ where: { name: "Imported Portal" } });
     expect(created).toMatchObject({
       type: "OTHER", phiVolume: 1200, encrypted: true, mfaEnabled: true,
     });
     expect(created?.lastAssessedAt?.toISOString()).toBe("2026-08-01T00:00:00.000Z");
 
     // Optional blank column falls back to the schema default rather than null.
-    const second = await prisma.asset.findUnique({ where: { name: "Imported Lab API" } });
+    const second = await prisma.asset.findFirst({ where: { name: "Imported Lab API" } });
     expect(second?.lastAssessedAt).toBeNull();
 
     // And it is visible through the ordinary read endpoint.
@@ -193,7 +193,7 @@ describe("happy path — every entity imports and is queryable afterward", () =>
     const res = await doImport("phi-types", csv);
     expect(res.status).toBe(201);
     expect(res.body.data.imported).toBe(2);
-    expect(await prisma.pHIType.findUnique({ where: { name: "Genetic" } })).toMatchObject({
+    expect(await prisma.pHIType.findFirst({ where: { name: "Genetic" } })).toMatchObject({
       sensitivity: "CRITICAL",
     });
   });
@@ -216,7 +216,7 @@ describe("happy path — every entity imports and is queryable afterward", () =>
     const csv = "name,baaStatus,phiVolume,lastAssessedAt\nNorthwind Claims,MISSING,71300,\n";
     const res = await doImport("vendors", csv);
     expect(res.status).toBe(201);
-    expect(await prisma.vendor.findUnique({ where: { name: "Northwind Claims" } })).toMatchObject({
+    expect(await prisma.vendor.findFirst({ where: { name: "Northwind Claims" } })).toMatchObject({
       baaStatus: "MISSING", phiVolume: 71300, lastAssessedAt: null,
     });
   });
@@ -229,7 +229,7 @@ describe("happy path — every entity imports and is queryable afterward", () =>
     const res = await doImport("access-grants", csv);
     expect(res.status).toBe(201);
 
-    const identity = await prisma.identity.findFirst({ where: { displayName: "Grace Okafor" } });
+    const identity = await prisma.identity.findFirst({ where: { organizationId: ids.organizationId, displayName: "Grace Okafor" } });
     const grant = await prisma.accessGrant.findFirst({
       where: { identityId: identity?.id, assetId: ids.ehrId },
     });
@@ -404,7 +404,7 @@ describe("duplicate detection", () => {
     expect(res.status).toBe(400);
     expect(res.body.error.report.errors[0].message).toContain("already exists");
     // The existing row is untouched, not overwritten.
-    expect(await prisma.asset.findUnique({ where: { name: "Test EHR" } })).toMatchObject({ type: "EHR" });
+    expect(await prisma.asset.findFirst({ where: { name: "Test EHR" } })).toMatchObject({ type: "EHR" });
   });
 
   it("matches an existing record case-insensitively", async () => {
@@ -457,16 +457,31 @@ describe("foreign keys by natural key", () => {
     expect(res.body.error.report.errors[0].message).toContain("No PHIType found");
   });
 
-  it("reports an ambiguous identity rather than guessing", async () => {
-    await prisma.identity.create({
-      data: { displayName: "Grace Okafor", email: "second.grace@test.local", kind: "USER" },
-    });
+  it("cannot have an ambiguous identity to resolve in the first place", async () => {
+    // Identity used to allow duplicate display names, so the import layer had
+    // to detect ambiguity and refuse to guess. The platform migration added a
+    // unique constraint on (organizationId, displayName), which makes the
+    // ambiguous case unrepresentable -- the second insert is rejected by the
+    // database rather than discovered later by the importer.
+    //
+    // The importer's ambiguity branch is retained as defence in depth; this
+    // test now pins the stronger guarantee that replaced it.
+    await expect(
+      prisma.identity.create({
+        data: {
+          organizationId: ids.organizationId,
+          displayName: "Grace Okafor",
+          email: "second.grace@test.local",
+          kind: "USER",
+        },
+      }),
+    ).rejects.toThrow(/Unique constraint/i);
 
+    // And the name still resolves, to the one identity that holds it.
     const csv = "identityName,assetName,level,grantedAt,lastUsedAt\nGrace Okafor,Test EHR,READ,,\n";
     const res = await doImport("access-grants", csv);
-
-    expect(res.status).toBe(400);
-    expect(res.body.error.report.errors[0].message).toContain("More than one Identity");
+    expect(res.status).toBe(201);
+    expect(res.body.data.imported).toBe(1);
   });
 
   it("validate surfaces the same reference failure without writing", async () => {
@@ -521,7 +536,7 @@ describe("file handling safety", () => {
     expect(res.status).toBe(201);
 
     // The table is still there and the value round-tripped verbatim.
-    expect(await prisma.asset.findUnique({ where: { name } })).not.toBeNull();
+    expect(await prisma.asset.findFirst({ where: { name } })).not.toBeNull();
     expect(await prisma.asset.count()).toBeGreaterThan(0);
   });
 });

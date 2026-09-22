@@ -2,6 +2,7 @@ import type request from "supertest";
 import { prisma } from "../src/lib/prisma.js";
 import { hashPassword } from "../src/services/authService.js";
 import { computeRisk } from "../src/services/riskScoring.js";
+import type { TenantContext } from "../src/lib/tenant.js";
 
 export const TEST_PASSWORD = "test-password";
 
@@ -17,34 +18,24 @@ function testPasswordHash(): Promise<string> {
 }
 
 /**
- * Logging in three roles per test cost ~240ms, most of it bcrypt.compare.
- * Tokens are safe to reuse across resets: requireAuth verifies the JWT
- * signature and claims without touching the database, and the fixture
- * recreates users in a fixed order after RESTART IDENTITY, so the ids the
- * token carries still name the same people.
+ * Tokens are no longer cached across resets.
  *
- * Keyed by email. Cleared by resetTokenCache() if a test ever needs a
- * genuinely fresh login.
+ * They used to be, on the reasoning that requireAuth verifies a JWT without
+ * touching the database. That is still true, but the token now carries an
+ * `organizationId`, and the fixture creates two organisations whose ids move
+ * with RESTART IDENTITY. A cached token would name the right user in the wrong
+ * tenant -- which is exactly the bug the tenant-isolation tests exist to
+ * catch, so caching here would hide it.
  */
-const tokenCache = new Map<string, string>();
-
 export function resetTokenCache(): void {
-  tokenCache.clear();
+  // Retained for API compatibility with existing tests; nothing to clear.
 }
 
 /**
- * A deliberately small fixture — two assets, one PHI type, one flow, two
- * risks — chosen so every assertion can name exact numbers rather than
- * asserting "greater than zero", which passes even when seeding is broken.
- *
- * The two assets differ in mfaEnabled so the flow-status rules are
- * observable through the API.
- */
-/**
  * Truncates every application table, discovered from the database rather than
  * listed here. A hardcoded list silently goes stale the moment a model is
- * added -- which it did: the vendor tables were missing, so rows leaked
- * between tests and every unique constraint tripped on the second run.
+ * added -- which it did once already, when the vendor tables were missing and
+ * rows leaked between tests.
  */
 export async function resetDatabase() {
   const rows = await prisma.$queryRawUnsafe<Array<{ tablename: string }>>(
@@ -57,27 +48,84 @@ export async function resetDatabase() {
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`);
 }
 
+export type Fixture = Awaited<ReturnType<typeof seedFixture>>;
+
+/**
+ * A deliberately small fixture -- two assets, one PHI type, one flow, two
+ * risks -- chosen so every assertion can name exact numbers rather than
+ * asserting "greater than zero", which passes even when seeding is broken.
+ *
+ * The two assets differ in mfaEnabled so the flow-status rules are observable
+ * through the API.
+ *
+ * Nothing beyond that is seeded into the caller's own organisation: tests that
+ * need a vendor, identity, grant, threat or control create their own, so the
+ * exact-count assertions stay exact.
+ *
+ * **Two organisations are created.** The second ("Rival Health") holds its own
+ * asset, vendor, identity and user, and exists solely so tenant isolation can
+ * be tested against real rows rather than against absence. A query that
+ * forgets its scope returns Rival's data and the test fails.
+ */
 export async function seedFixture() {
   await resetDatabase();
 
   const passwordHash = await testPasswordHash();
-  await prisma.user.createMany({
-    data: [
-      { email: "admin@test.local", role: "ADMIN", passwordHash },
-      { email: "analyst@test.local", role: "ANALYST", passwordHash },
-      { email: "viewer@test.local", role: "VIEWER", passwordHash },
-    ],
+
+  const org = await prisma.organization.create({
+    data: { name: "Test Health System", slug: "test-health" },
+  });
+  const otherOrg = await prisma.organization.create({
+    data: { name: "Rival Health", slug: "rival-health" },
   });
 
+  const users = await Promise.all(
+    (
+      [
+        ["admin@test.local", "ADMIN"],
+        ["analyst@test.local", "ANALYST"],
+        ["viewer@test.local", "VIEWER"],
+      ] as const
+    ).map(([email, role]) =>
+      prisma.user.create({
+        data: {
+          email,
+          role,
+          passwordHash,
+          memberships: { create: { organizationId: org.id, role } },
+        },
+      }),
+    ),
+  );
+
+  // Belongs to the other tenant only. Used to prove a valid session cannot
+  // read across the boundary.
+  const outsider = await prisma.user.create({
+    data: {
+      email: "outsider@rival.local",
+      role: "ADMIN",
+      passwordHash,
+      memberships: { create: { organizationId: otherOrg.id, role: "ADMIN" } },
+    },
+  });
+
+  const organizationId = org.id;
+
   const ehr = await prisma.asset.create({
-    data: { name: "Test EHR", type: "EHR", phiVolume: 1000, encrypted: true, mfaEnabled: true },
+    data: {
+      organizationId, name: "Test EHR", type: "EHR",
+      phiVolume: 1000, encrypted: true, mfaEnabled: true,
+    },
   });
   const billing = await prisma.asset.create({
-    data: { name: "Test Billing", type: "DATABASE", phiVolume: 500, encrypted: false, mfaEnabled: false },
+    data: {
+      organizationId, name: "Test Billing", type: "DATABASE",
+      phiVolume: 500, encrypted: false, mfaEnabled: false,
+    },
   });
 
   const clinical = await prisma.pHIType.create({
-    data: { name: "Clinical", sensitivity: "HIGH" },
+    data: { organizationId, name: "Clinical", sensitivity: "HIGH" },
   });
 
   await prisma.assetPHI.create({
@@ -86,6 +134,7 @@ export async function seedFixture() {
 
   await prisma.dataFlow.create({
     data: {
+      organizationId,
       sourceAssetId: ehr.id,
       targetAssetId: billing.id,
       phiTypeId: clinical.id,
@@ -100,22 +149,68 @@ export async function seedFixture() {
   ] as const) {
     const { score, band } = computeRisk(l, i, e, c);
     await prisma.risk.create({
-      data: { assetId, likelihood: l, impact: i, exposure: e, controlGap: c, score, band },
+      data: {
+        organizationId, assetId,
+        likelihood: l, impact: i, exposure: e, controlGap: c,
+        score, band,
+      },
     });
   }
 
-  return { ehrId: ehr.id, billingId: billing.id, phiTypeId: clinical.id };
+  // ------------------------------------------------- the other tenant's data
+  const rivalAsset = await prisma.asset.create({
+    data: {
+      organizationId: otherOrg.id, name: "Rival EHR", type: "EHR",
+      phiVolume: 9999, encrypted: true, mfaEnabled: true,
+    },
+  });
+  const rivalVendor = await prisma.vendor.create({
+    data: { organizationId: otherOrg.id, name: "Rival Vendor", baaStatus: "MISSING" },
+  });
+  const rivalIdentity = await prisma.identity.create({
+    data: { organizationId: otherOrg.id, displayName: "Rival Person", kind: "USER" },
+  });
+  const rivalThreat = await prisma.threat.create({
+    data: {
+      organizationId: otherOrg.id, assetId: rivalAsset.id, severity: "CRITICAL",
+      status: "OPEN", title: "Rival threat", description: "Belongs to the other tenant.",
+    },
+  });
+
+  return {
+    organizationId,
+    otherOrganizationId: otherOrg.id,
+    ehrId: ehr.id,
+    billingId: billing.id,
+    phiTypeId: clinical.id,
+    adminUserId: users[0]!.id,
+    outsiderUserId: outsider.id,
+    rivalAssetId: rivalAsset.id,
+    rivalVendorId: rivalVendor.id,
+    rivalIdentityId: rivalIdentity.id,
+    rivalThreatId: rivalThreat.id,
+  };
+}
+
+/** A TenantContext for calling services directly, without HTTP. */
+export function contextFor(
+  fixture: Fixture,
+  role: "ADMIN" | "ANALYST" | "VIEWER" = "ADMIN",
+): TenantContext {
+  return {
+    userId: fixture.adminUserId,
+    email: "admin@test.local",
+    role,
+    organizationId: fixture.organizationId,
+  };
 }
 
 /** Whatever `request(app)` hands back -- taken from supertest rather than
  * approximated, since a hand-rolled shape drifts from the real one. */
 type LoginAgent = ReturnType<typeof request>;
 
-/** Logs in through the real route and returns the bearer token. */
+/** Logs in through the real route and returns the bearer access token. */
 export async function tokenFor(agent: LoginAgent, email: string): Promise<string> {
-  const cached = tokenCache.get(email);
-  if (cached) return cached;
-
   const res = await agent.post("/api/auth/login").send({ email, password: TEST_PASSWORD });
   if (res.status !== 200) {
     throw new Error(`login failed for ${email}: ${res.status} ${JSON.stringify(res.body)}`);
@@ -124,6 +219,19 @@ export async function tokenFor(agent: LoginAgent, email: string): Promise<string
   if (typeof token !== "string") {
     throw new Error(`login for ${email} returned no token: ${JSON.stringify(res.body)}`);
   }
-  tokenCache.set(email, token);
   return token;
+}
+
+/** Logs in and returns the full session, for refresh-token tests. */
+export async function sessionFor(agent: LoginAgent, email: string) {
+  const res = await agent.post("/api/auth/login").send({ email, password: TEST_PASSWORD });
+  if (res.status !== 200) {
+    throw new Error(`login failed for ${email}: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  return res.body.data as {
+    token: string;
+    refreshToken: string;
+    expiresIn: number;
+    user: { id: number; email: string; role: string; organizationId: number };
+  };
 }

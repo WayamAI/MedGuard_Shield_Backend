@@ -22,7 +22,7 @@ beforeEach(async () => {
 
   const vendor = await prisma.vendor.create({
     data: {
-      name: "Test Vendor",
+      organizationId: ids.organizationId, name: "Test Vendor",
       baaStatus: "MISSING",
       phiVolume: 5000,
       lastAssessedAt: new Date(Date.now() - 400 * DAY),
@@ -33,7 +33,7 @@ beforeEach(async () => {
 
   const { score, band } = computeRisk(5, 5, 5, 5);
   await prisma.vendorRisk.create({
-    data: { vendorId, likelihood: 5, impact: 5, exposure: 5, controlGap: 5, score, band },
+    data: { organizationId: ids.organizationId, vendorId, likelihood: 5, impact: 5, exposure: 5, controlGap: 5, score, band },
   });
 });
 
@@ -125,7 +125,7 @@ describe("vendor writes follow the same RBAC rules as assets", () => {
     const res = await request(app).post("/api/vendors")
       .set("Authorization", `Bearer ${tokens.VIEWER}`).send(body);
     expect(res.status).toBe(403);
-    expect(await prisma.vendor.findUnique({ where: { name: "New Vendor" } })).toBeNull();
+    expect(await prisma.vendor.findFirst({ where: { name: "New Vendor" } })).toBeNull();
   });
 
   it("allows ADMIN to patch and leaves untouched fields alone", async () => {
