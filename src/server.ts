@@ -6,8 +6,8 @@ const port = Number(process.env.PORT ?? 4000);
 const app = createApp();
 
 const server = app.listen(port, () => {
-  console.log(`[medguard] API listening on http://localhost:${port}`);
-  console.log(`[medguard] CORS origin: ${process.env.FRONTEND_ORIGIN ?? "http://localhost:8080"}`);
+  console.log(`[drishti] API listening on http://localhost:${port}`);
+  console.log(`[drishti] CORS origin: ${process.env.FRONTEND_ORIGIN ?? "http://localhost:8080"}`);
 });
 
 // Close the pool on shutdown so `tsx watch` restarts do not leak connections.

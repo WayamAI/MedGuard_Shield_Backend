@@ -85,7 +85,7 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   const parseFailure = bodyParserFailure(err);
   if (parseFailure) {
     console.error(
-      `[medguard] rejected unreadable request body: ${(err as BodyParserError).type} -> ${parseFailure.status}`,
+      `[drishti] rejected unreadable request body: ${(err as BodyParserError).type} -> ${parseFailure.status}`,
     );
     res.status(parseFailure.status).json({
       error: { code: parseFailure.code, message: parseFailure.message },
@@ -99,6 +99,6 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
     return;
   }
 
-  console.error("[medguard] unhandled error:", withoutRawBody(err));
+  console.error("[drishti] unhandled error:", withoutRawBody(err));
   res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Internal server error" } });
 };

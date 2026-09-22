@@ -1,6 +1,7 @@
 import { Router, type RequestHandler } from "express";
 import multer from "multer";
-import { requireRole } from "../middleware/auth.js";
+import { ctxOf, requireRole } from "../middleware/auth.js";
+import { recordAudit } from "../services/auditService.js";
 import { BadRequestError, HttpError, NotFoundError } from "../lib/errors.js";
 import { templateCsv } from "../services/importParsing.js";
 import { runImport, validateImport } from "../services/importService.js";
@@ -109,7 +110,7 @@ importRouter.get("/:entity/template", adminOnly, (req, res, next) => {
   try {
     const spec = requireSpec(req.params.entity);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="medguard-${spec.slug}-template.csv"`);
+    res.setHeader("Content-Disposition", `attachment; filename="drishti-${spec.slug}-template.csv"`);
     res.send(templateCsv(spec));
   } catch (err) {
     next(err);
@@ -119,7 +120,7 @@ importRouter.get("/:entity/template", adminOnly, (req, res, next) => {
 importRouter.post("/:entity/validate", adminOnly, uploadCsv, async (req, res, next) => {
   try {
     const spec = requireSpec(req.params.entity);
-    const report = await validateImport(spec, csvTextFrom(req.file));
+    const report = await validateImport(ctxOf(req), spec, csvTextFrom(req.file));
     // A dry run that found problems is a successful dry run, so this is 200
     // with valid:false rather than an error status.
     res.json({ data: report });
@@ -129,11 +130,41 @@ importRouter.post("/:entity/validate", adminOnly, uploadCsv, async (req, res, ne
 });
 
 importRouter.post("/:entity", adminOnly, uploadCsv, async (req, res, next) => {
+  const ctx = ctxOf(req);
+  let spec;
   try {
-    const spec = requireSpec(req.params.entity);
-    const result = await runImport(spec, csvTextFrom(req.file));
+    spec = requireSpec(req.params.entity);
+  } catch (err) {
+    next(err);
+    return;
+  }
+
+  const filename = req.file?.originalname ?? null;
+
+  try {
+    // Recorded before the work starts, so an import that crashes mid-flight
+    // still leaves evidence that it was attempted and by whom.
+    await recordAudit(ctx, {
+      action: "IMPORT_STARTED",
+      entityType: "Import",
+      metadata: { entity: spec.slug, filename, bytes: req.file?.size ?? null },
+      req,
+    });
+
+    const result = await runImport(ctx, spec, csvTextFrom(req.file));
 
     if (!result.valid) {
+      await recordAudit(ctx, {
+        action: "IMPORT_FAILED",
+        entityType: "Import",
+        result: "FAILURE",
+        metadata: {
+          entity: spec.slug, filename,
+          totalRows: result.totalRows, errorCount: result.errors.length,
+        },
+        req,
+      });
+
       res.status(400).json({
         error: {
           code: "IMPORT_VALIDATION_FAILED",
@@ -144,8 +175,30 @@ importRouter.post("/:entity", adminOnly, uploadCsv, async (req, res, next) => {
       return;
     }
 
+    await recordAudit(ctx, {
+      action: "IMPORT_COMPLETED",
+      entityType: "Import",
+      metadata: {
+        entity: spec.slug, filename,
+        totalRows: result.totalRows, imported: result.imported,
+      },
+      req,
+    });
+
     res.status(201).json({ data: result });
   } catch (err) {
+    // A thrown import (bad file, oversized upload, database error) is still a
+    // failed import and is recorded as one before the error propagates.
+    await recordAudit(ctx, {
+      action: "IMPORT_FAILED",
+      entityType: "Import",
+      result: "FAILURE",
+      metadata: {
+        entity: spec.slug, filename,
+        reason: err instanceof Error ? err.message : "unknown",
+      },
+      req,
+    }).catch(() => undefined);
     next(err);
   }
 });

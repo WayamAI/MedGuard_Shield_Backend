@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { BadRequestError } from "../lib/errors.js";
+import { scope, type TenantContext } from "../lib/tenant.js";
 import { computeRisk } from "./riskScoring.js";
 import { parseCsv, type ParsedRow, type RowError } from "./importParsing.js";
 import type { EntitySpec, RefTarget } from "./importSpec.js";
@@ -24,7 +25,10 @@ export type ImportReport = {
 const PREVIEW_ROWS = 10;
 
 /** Prisma client for a transaction, or the bare client outside one. */
-type Db = Pick<typeof prisma, "asset" | "pHIType" | "identity" | "dataFlow" | "accessGrant" | "threat" | "risk" | "vendor">;
+type Db = Pick<
+  typeof prisma,
+  "asset" | "pHIType" | "identity" | "dataFlow" | "accessGrant" | "threat" | "risk" | "riskHistory" | "vendor"
+>;
 
 /**
  * Reference tables are loaded whole rather than queried key by key. They are
@@ -33,18 +37,22 @@ type Db = Pick<typeof prisma, "asset" | "pHIType" | "identity" | "dataFlow" | "a
  * because a human typing "epic ehr core" means the same system as the file
  * that says "Epic EHR Core".
  */
-async function loadRefIndex(db: Db, target: RefTarget): Promise<Map<string, number>> {
+async function loadRefIndex(
+  db: Db,
+  ctx: TenantContext,
+  target: RefTarget,
+): Promise<Map<string, number>> {
   const index = new Map<string, number>();
 
   if (target === "Asset") {
-    for (const r of await db.asset.findMany({ select: { id: true, name: true } })) {
+    for (const r of await db.asset.findMany({ where: scope(ctx), select: { id: true, name: true } })) {
       index.set(r.name.toLowerCase(), r.id);
     }
     return index;
   }
 
   if (target === "PHIType") {
-    for (const r of await db.pHIType.findMany({ select: { id: true, name: true } })) {
+    for (const r of await db.pHIType.findMany({ where: scope(ctx), select: { id: true, name: true } })) {
       index.set(r.name.toLowerCase(), r.id);
     }
     return index;
@@ -54,7 +62,7 @@ async function loadRefIndex(db: Db, target: RefTarget): Promise<Map<string, numb
   // must fail rather than silently pick one. A duplicated name maps to -1,
   // which resolveRefs reports as ambiguous.
   const seen = new Map<string, number>();
-  for (const r of await db.identity.findMany({ select: { id: true, displayName: true } })) {
+  for (const r of await db.identity.findMany({ where: scope(ctx), select: { id: true, displayName: true } })) {
     const key = r.displayName.toLowerCase();
     seen.set(key, seen.has(key) ? -1 : r.id);
   }
@@ -73,13 +81,14 @@ function refTargets(spec: EntitySpec): RefTarget[] {
  */
 async function resolveRefs(
   db: Db,
+  ctx: TenantContext,
   spec: EntitySpec,
   rows: ParsedRow[],
   rowNumbers: number[],
 ): Promise<{ resolved: Record<string, unknown>[]; keptIndices: number[]; errors: RowError[] }> {
   const indexes = new Map<RefTarget, Map<string, number>>();
   for (const target of refTargets(spec)) {
-    indexes.set(target, await loadRefIndex(db, target));
+    indexes.set(target, await loadRefIndex(db, ctx, target));
   }
 
   const errors: RowError[] = [];
@@ -138,6 +147,7 @@ async function resolveRefs(
  */
 async function existingRecordErrors(
   db: Db,
+  ctx: TenantContext,
   spec: EntitySpec,
   resolved: Record<string, unknown>[],
   rowNumbers: number[],
@@ -155,14 +165,14 @@ async function existingRecordErrors(
     case "assets": {
       const names = resolved.map((r) => String(r.name));
       const existing = new Set(
-        (await db.asset.findMany({ select: { name: true } })).map((r) => r.name.toLowerCase()),
+        (await db.asset.findMany({ where: scope(ctx), select: { name: true } })).map((r) => r.name.toLowerCase()),
       );
       names.forEach((n, i) => { if (existing.has(n.toLowerCase())) clash(i, n); });
       break;
     }
     case "phi-types": {
       const existing = new Set(
-        (await db.pHIType.findMany({ select: { name: true } })).map((r) => r.name.toLowerCase()),
+        (await db.pHIType.findMany({ where: scope(ctx), select: { name: true } })).map((r) => r.name.toLowerCase()),
       );
       resolved.forEach((r, i) => {
         const n = String(r.name);
@@ -172,7 +182,7 @@ async function existingRecordErrors(
     }
     case "vendors": {
       const existing = new Set(
-        (await db.vendor.findMany({ select: { name: true } })).map((r) => r.name.toLowerCase()),
+        (await db.vendor.findMany({ where: scope(ctx), select: { name: true } })).map((r) => r.name.toLowerCase()),
       );
       resolved.forEach((r, i) => {
         const n = String(r.name);
@@ -182,7 +192,7 @@ async function existingRecordErrors(
     }
     case "data-flows": {
       const existing = new Set(
-        (await db.dataFlow.findMany({ select: { sourceAssetId: true, targetAssetId: true, phiTypeId: true } }))
+        (await db.dataFlow.findMany({ where: scope(ctx), select: { sourceAssetId: true, targetAssetId: true, phiTypeId: true } }))
           .map((r) => `${r.sourceAssetId}:${r.targetAssetId}:${r.phiTypeId}`),
       );
       resolved.forEach((r, i) => {
@@ -194,7 +204,7 @@ async function existingRecordErrors(
     }
     case "access-grants": {
       const existing = new Set(
-        (await db.accessGrant.findMany({ select: { identityId: true, assetId: true } }))
+        (await db.accessGrant.findMany({ where: scope(ctx), select: { identityId: true, assetId: true } }))
           .map((r) => `${r.identityId}:${r.assetId}`),
       );
       resolved.forEach((r, i) => {
@@ -206,7 +216,7 @@ async function existingRecordErrors(
     }
     case "threats": {
       const existing = new Set(
-        (await db.threat.findMany({ select: { assetId: true, title: true } }))
+        (await db.threat.findMany({ where: scope(ctx), select: { assetId: true, title: true } }))
           .map((r) => `${r.assetId}:${r.title.toLowerCase()}`),
       );
       resolved.forEach((r, i) => {
@@ -220,7 +230,7 @@ async function existingRecordErrors(
       // A Risk row is the current assessment for an asset. Importing a second
       // one would quietly create a competing record, so it is refused; use
       // POST /api/risks/:assetId/recompute to rescore instead.
-      const existing = new Set((await db.risk.findMany({ select: { assetId: true } })).map((r) => r.assetId));
+      const existing = new Set((await db.risk.findMany({ where: scope(ctx), select: { assetId: true } })).map((r) => r.assetId));
       resolved.forEach((r, i) => {
         if (existing.has(Number(r.assetId))) clash(i, String(originalRows[i]?.assetName ?? ""));
       });
@@ -242,6 +252,7 @@ function byRowThenField(a: RowError, b: RowError): number {
  */
 async function analyse(
   db: Db,
+  ctx: TenantContext,
   spec: EntitySpec,
   text: string,
 ): Promise<{ report: ImportReport; insertable: Record<string, unknown>[] }> {
@@ -255,14 +266,14 @@ async function analyse(
   if (parsed.errors.length > 0 && parsed.rows.length === 0) return empty(parsed.errors);
 
   const { resolved, keptIndices, errors: refErrors } =
-    await resolveRefs(db, spec, parsed.rows, parsed.rowNumbers);
+    await resolveRefs(db, ctx, spec, parsed.rows, parsed.rowNumbers);
 
   // Index-aligned with `resolved`, so a duplicate found on the third surviving
   // row still reports the line that row actually came from.
   const keptRowNumbers = keptIndices.map((i) => parsed.rowNumbers[i] ?? 0);
   const keptOriginals = keptIndices.map((i) => parsed.rows[i] ?? {});
 
-  const dupErrors = await existingRecordErrors(db, spec, resolved, keptRowNumbers, keptOriginals);
+  const dupErrors = await existingRecordErrors(db, ctx, spec, resolved, keptRowNumbers, keptOriginals);
   const errors = [...parsed.errors, ...refErrors, ...dupErrors].sort(byRowThenField);
 
   // Preview shows the file as parsed — natural keys, not resolved ids, because
@@ -276,37 +287,77 @@ async function analyse(
 }
 
 /** Dry run. Touches the database only to read. */
-export async function validateImport(spec: EntitySpec, text: string): Promise<ImportReport> {
-  const { report } = await analyse(prisma, spec, text);
+export async function validateImport(
+  ctx: TenantContext,
+  spec: EntitySpec,
+  text: string,
+): Promise<ImportReport> {
+  const { report } = await analyse(prisma, ctx, spec, text);
   return report;
 }
 
 /** Turns validated rows into Prisma creates for one entity. */
-async function insertRows(db: Db, spec: EntitySpec, rows: Record<string, unknown>[]): Promise<number> {
+async function insertRows(
+  db: Db,
+  ctx: TenantContext,
+  spec: EntitySpec,
+  rows: Record<string, unknown>[],
+): Promise<number> {
+  // Every imported row is stamped with the caller's organisation. The CSV has
+  // no say in this and no column for it -- a file cannot nominate the tenant
+  // it lands in.
+  const scoped: Record<string, unknown>[] = rows.map((r) => ({
+    ...r,
+    organizationId: ctx.organizationId,
+  }));
+
   switch (spec.slug) {
     case "assets":
-      return (await db.asset.createMany({ data: rows as never })).count;
+      return (await db.asset.createMany({ data: scoped as never })).count;
     case "phi-types":
-      return (await db.pHIType.createMany({ data: rows as never })).count;
+      return (await db.pHIType.createMany({ data: scoped as never })).count;
     case "vendors":
-      return (await db.vendor.createMany({ data: rows as never })).count;
+      return (await db.vendor.createMany({ data: scoped as never })).count;
     case "data-flows":
-      return (await db.dataFlow.createMany({ data: rows as never })).count;
+      return (await db.dataFlow.createMany({ data: scoped as never })).count;
     case "access-grants":
-      return (await db.accessGrant.createMany({ data: rows as never })).count;
+      return (await db.accessGrant.createMany({ data: scoped as never })).count;
     case "threats":
-      return (await db.threat.createMany({ data: rows as never })).count;
+      return (await db.threat.createMany({ data: scoped as never })).count;
     case "risks": {
       // score and band are derived here, by the same function riskEngine uses,
       // so an imported assessment lands identical to one scored through the
       // API. No band is accepted from the file at all.
-      const scored = rows.map((r) => {
+      const scored: Record<string, unknown>[] = scoped.map((r) => {
         const { score, band } = computeRisk(
           Number(r.likelihood), Number(r.impact), Number(r.exposure), Number(r.controlGap),
         );
         return { ...r, score, band };
       });
-      return (await db.risk.createMany({ data: scored as never })).count;
+      const created = (await db.risk.createMany({ data: scored as never })).count;
+
+      // An imported assessment is a risk change like any other, so it gets a
+      // history row with reason IMPORTED and no previous value -- import only
+      // ever creates a first assessment, because a pre-existing Risk row is
+      // rejected as a duplicate upstream.
+      await db.riskHistory.createMany({
+        data: scored.map((r) => ({
+          organizationId: ctx.organizationId,
+          assetId: Number(r.assetId),
+          previousScore: null,
+          previousBand: null,
+          score: r.score,
+          band: r.band,
+          likelihood: Number(r.likelihood),
+          impact: Number(r.impact),
+          exposure: Number(r.exposure),
+          controlGap: Number(r.controlGap),
+          reason: "IMPORTED" as const,
+          changedById: ctx.userId,
+        })) as never,
+      });
+
+      return created;
     }
     default:
       throw new BadRequestError(`Unsupported entity "${spec.slug}"`);
@@ -320,12 +371,16 @@ export type ImportResult = ImportReport & { imported: number };
  * lands whole or not at all — including the re-check, which runs against the
  * transaction's own view rather than a snapshot taken beforehand.
  */
-export async function runImport(spec: EntitySpec, text: string): Promise<ImportResult> {
+export async function runImport(
+  ctx: TenantContext,
+  spec: EntitySpec,
+  text: string,
+): Promise<ImportResult> {
   return prisma.$transaction(async (tx) => {
-    const { report, insertable } = await analyse(tx as unknown as Db, spec, text);
+    const { report, insertable } = await analyse(tx as unknown as Db, ctx, spec, text);
     if (!report.valid) return { ...report, imported: 0 };
 
-    const imported = await insertRows(tx as unknown as Db, spec, insertable);
+    const imported = await insertRows(tx as unknown as Db, ctx, spec, insertable);
     return { ...report, imported };
   });
 }

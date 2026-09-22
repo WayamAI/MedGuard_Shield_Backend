@@ -1,10 +1,16 @@
 import type { AuthUser } from "../services/authService.js";
+import type { TenantContext } from "../lib/tenant.js";
 
-// Lets route handlers read req.user without casting.
 declare global {
   namespace Express {
     interface Request {
+      /** Raw verified token claims. Populated by requireAuth. */
       user?: AuthUser;
+      /**
+       * Tenant context every service takes as its first argument. Populated by
+       * requireAuth from the signed token — never from request input.
+       */
+      ctx?: TenantContext;
     }
   }
 }
