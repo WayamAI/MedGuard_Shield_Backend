@@ -44,11 +44,24 @@ risksRouter.get("/distribution", async (req, res, next) => {
   }
 });
 
-/** Estate-wide risk movement, newest first. */
-risksRouter.get("/history", validate({ query: paginationQuery }), async (req, res, next) => {
+const historyQuery = paginationQuery.extend({
+  /** Narrow to asset or vendor movement. Omitted, both are returned. */
+  subjectType: z.enum(["ASSET", "VENDOR"]).optional(),
+  assetId: z.coerce.number().int().positive().optional(),
+  vendorId: z.coerce.number().int().positive().optional(),
+});
+
+/** Estate-wide risk movement, assets and vendors alike, newest first. */
+risksRouter.get("/history", validate({ query: historyQuery }), async (req, res, next) => {
   try {
-    const page = pageParams(paginationQuery.parse(req.query));
-    const { entries, total } = await listRiskHistory(ctxOf(req), page);
+    const q = historyQuery.parse(req.query);
+    const page = pageParams(q);
+    const { entries, total } = await listRiskHistory(ctxOf(req), {
+      ...page,
+      ...(q.subjectType ? { subjectType: q.subjectType } : {}),
+      ...(q.assetId ? { assetId: q.assetId } : {}),
+      ...(q.vendorId ? { vendorId: q.vendorId } : {}),
+    });
     paged(res, entries, pageMeta(page, total));
   } catch (err) {
     next(err);

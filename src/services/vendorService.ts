@@ -2,7 +2,6 @@ import type { BaaStatus, Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { ConflictError, NotFoundError } from "../lib/errors.js";
 import { scope, type TenantContext } from "../lib/tenant.js";
-import { computeRisk } from "./riskScoring.js";
 import { isUniqueViolation } from "./assetService.js";
 
 /** Vendors are expected to be reassessed annually. */
@@ -221,90 +220,14 @@ export async function restoreVendor(ctx: TenantContext, id: number) {
   return prisma.vendor.update({ where: { id }, data: { archivedAt: null } });
 }
 
-export type VendorAssessmentInputs = {
-  likelihood: number;
-  impact: number;
-  exposure: number;
-  controlGap: number;
-};
-
 /**
- * Records a vendor assessment. Mirrors `assessAsset`: same formula, same
- * bands, one row per vendor.
+ * Vendor risk assessment and recomputation live in riskEngine.ts.
  *
- * Vendor risk movement is **not** yet written to RiskHistory — that table is
- * keyed to an asset. Vendor history is a known gap, recorded rather than
- * faked; see DRISHTI_BACKEND_IMPLEMENTATION_REPORT.md.
+ * They used to live here, with their own `computeRisk` call and their own
+ * upsert -- a second implementation of the same formula that had to be kept in
+ * step by hand. There is one risk engine; this is not it. Routes import
+ * `assessVendor` and `recomputeVendorRisk` from riskEngine directly.
  */
-export async function assessVendorRisk(
-  ctx: TenantContext,
-  vendorId: number,
-  inputs: VendorAssessmentInputs,
-) {
-  const vendor = await prisma.vendor.findFirst({
-    where: { id: vendorId, ...scope(ctx) },
-    select: { id: true, name: true },
-  });
-  if (!vendor) throw new NotFoundError(`Vendor ${vendorId} not found`);
-
-  const { score, band } = computeRisk(
-    inputs.likelihood,
-    inputs.impact,
-    inputs.exposure,
-    inputs.controlGap,
-  );
-
-  const existing = await prisma.vendorRisk.findUnique({ where: { vendorId } });
-
-  const updated = await prisma.vendorRisk.upsert({
-    where: { vendorId },
-    create: {
-      organizationId: ctx.organizationId,
-      vendorId,
-      ...inputs,
-      score,
-      band,
-      computedAt: new Date(),
-    },
-    update: { ...inputs, score, band, computedAt: new Date() },
-  });
-
-  return {
-    id: updated.id,
-    vendorId,
-    vendorName: vendor.name,
-    likelihood: updated.likelihood,
-    impact: updated.impact,
-    exposure: updated.exposure,
-    controlGap: updated.controlGap,
-    score: updated.score,
-    band: updated.band,
-    computedAt: updated.computedAt,
-    previous: existing ? { score: existing.score, band: existing.band } : null,
-  };
-}
-
-/** Re-scores from stored inputs. 404s when the vendor was never assessed. */
-export async function recomputeVendorRisk(ctx: TenantContext, vendorId: number) {
-  const risk = await prisma.vendorRisk.findUnique({ where: { vendorId } });
-  if (!risk) {
-    const exists = await prisma.vendor.findFirst({
-      where: { id: vendorId, ...scope(ctx) },
-      select: { id: true },
-    });
-    if (!exists) throw new NotFoundError(`Vendor ${vendorId} not found`);
-    throw new NotFoundError(
-      `No risk assessment exists for vendor ${vendorId}. Create one with POST /api/vendors/${vendorId}/assessment.`,
-    );
-  }
-
-  return assessVendorRisk(ctx, vendorId, {
-    likelihood: risk.likelihood,
-    impact: risk.impact,
-    exposure: risk.exposure,
-    controlGap: risk.controlGap,
-  });
-}
 
 /** Grants or removes a vendor's reach into an asset. */
 export async function setVendorAssetAccess(

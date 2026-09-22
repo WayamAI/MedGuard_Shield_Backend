@@ -6,10 +6,12 @@ import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery, sortOrder } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
 import {
-  archiveVendor, assessVendorRisk, createVendor, getVendorById, listVendors,
-  recomputeVendorRisk, restoreVendor, setVendorAssetAccess, updateVendor,
+  archiveVendor, createVendor, getVendorById, listVendors,
+  restoreVendor, setVendorAssetAccess, updateVendor,
 } from "../services/vendorService.js";
+import { assessVendor, listRiskHistory, recomputeVendorRisk } from "../services/riskEngine.js";
 import { entityHistory } from "../services/auditQueryService.js";
+import { onVendorAccessChanged, onVendorChanged, vendorFieldsAffectRisk } from "../services/riskTriggers.js";
 
 export const vendorsRouter = Router();
 
@@ -36,11 +38,19 @@ const listQuery = paginationQuery.extend({
   order: sortOrder.optional(),
 });
 
+/**
+ * An assessment.
+ *
+ * `likelihood` and `impact` are required: they are judgement, and nothing in
+ * the graph can supply them. `exposure` and `controlGap` are optional and are
+ * derived from recorded facts when omitted -- supplying either pins it against
+ * automatic recalculation, which is how an assessor overrides the derivation.
+ */
 const assessmentBody = z.object({
   likelihood: z.number().int().min(1).max(5),
   impact: z.number().int().min(1).max(5),
-  exposure: z.number().int().min(1).max(5),
-  controlGap: z.number().int().min(1).max(5),
+  exposure: z.number().int().min(1).max(5).optional(),
+  controlGap: z.number().int().min(1).max(5).optional(),
 });
 
 
@@ -92,7 +102,12 @@ vendorsRouter.patch(
         metadata: { changes: diffFields(before, input) }, req,
       });
 
-      ok(res, after);
+      // BAA state and assessment recency feed the vendor's control-gap factor.
+      const risk = vendorFieldsAffectRisk(input)
+        ? await onVendorChanged(ctx, id, "VENDOR_ACCESS_CHANGED", req)
+        : { changed: [] };
+
+      ok(res, { ...after, riskChanged: risk.changed[0] ?? null });
     } catch (err) {
       next(err);
     }
@@ -135,7 +150,7 @@ vendorsRouter.post(
     try {
       const ctx = ctxOf(req);
       const { id } = idParam.parse(req.params);
-      const snapshot = await assessVendorRisk(ctx, id, assessmentBody.parse(req.body));
+      const snapshot = await assessVendor(ctx, id, assessmentBody.parse(req.body));
       await recordAudit(ctx, {
         action: snapshot.previous ? "RISK_UPDATED" : "RISK_CREATED",
         entityType: "Vendor", entityId: id,
@@ -183,7 +198,10 @@ vendorsRouter.put(
         action: "VENDOR_UPDATED", entityType: "Vendor", entityId: id,
         metadata: { grantedAssetAccess: assetId }, req,
       });
-      ok(res, result);
+      // Both sides move: the vendor now reaches more PHI, and the asset is now
+      // reachable by one more vendor.
+      const risk = await onVendorAccessChanged(ctx, id, assetId, req);
+      ok(res, { ...result, riskChanged: risk.changed });
     } catch (err) {
       next(err);
     }
@@ -201,7 +219,38 @@ vendorsRouter.delete(
         action: "VENDOR_UPDATED", entityType: "Vendor", entityId: id,
         metadata: { revokedAssetAccess: assetId }, req,
       });
-      ok(res, result);
+      // alsoAsset: the link is gone, so walking the vendor's remaining links
+      // would miss the asset that just lost it.
+      const risk = await onVendorAccessChanged(ctx, id, assetId, req);
+      ok(res, { ...result, riskChanged: risk.changed });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * Vendor risk movement over time.
+ *
+ * Shares RiskHistory with assets rather than using a second table -- the four
+ * factors, the formula and the bands are identical, and two tables would mean
+ * two places to forget to write a row. `subjectType` distinguishes them.
+ */
+vendorsRouter.get(
+  "/:id/risk-history",
+  validate({ params: idParam, query: paginationQuery }),
+  async (req, res, next) => {
+    try {
+      const ctx = ctxOf(req);
+      const { id } = idParam.parse(req.params);
+
+      // Scoped existence check first, so another tenant's vendor id returns
+      // 404 rather than an empty page that looks like "no history yet".
+      await getVendorById(ctx, id);
+
+      const page = pageParams(paginationQuery.parse(req.query));
+      const { entries, total } = await listRiskHistory(ctx, { vendorId: id, ...page });
+      paged(res, entries, pageMeta(page, total));
     } catch (err) {
       next(err);
     }

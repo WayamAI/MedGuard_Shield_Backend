@@ -11,6 +11,7 @@ import {
 import { assessAsset, listRiskHistory, recomputeAssetRisk } from "../services/riskEngine.js";
 import { controlGapEvidence, setAssetControl } from "../services/controlService.js";
 import { entityHistory } from "../services/auditQueryService.js";
+import { assetFieldsAffectRisk, onAssetChanged } from "../services/riskTriggers.js";
 
 export const assetsRouter = Router();
 
@@ -44,12 +45,19 @@ const listQuery = paginationQuery.extend({
   order: sortOrder.optional(),
 });
 
-/** The 1-5 assessor judgements. Range is enforced again in riskScoring. */
+/**
+ * An assessment.
+ *
+ * `likelihood` and `impact` are required: they are judgement, and nothing in
+ * the graph can supply them. `exposure` and `controlGap` are optional and are
+ * derived from recorded facts when omitted -- supplying either pins it against
+ * automatic recalculation, which is how an assessor overrides the derivation.
+ */
 const assessmentBody = z.object({
   likelihood: z.number().int().min(1).max(5),
   impact: z.number().int().min(1).max(5),
-  exposure: z.number().int().min(1).max(5),
-  controlGap: z.number().int().min(1).max(5),
+  exposure: z.number().int().min(1).max(5).optional(),
+  controlGap: z.number().int().min(1).max(5).optional(),
 });
 
 
@@ -109,7 +117,13 @@ assetsRouter.patch(
         req,
       });
 
-      ok(res, after);
+      // PHI volume, encryption and MFA feed the derived exposure factor.
+      // Renaming an asset cannot move a score, so it does not trigger one.
+      const risk = assetFieldsAffectRisk(input)
+        ? await onAssetChanged(ctx, id, "ASSET_CHANGED", req)
+        : { changed: [] };
+
+      ok(res, { ...after, riskChanged: risk.changed[0] ?? null });
     } catch (err) {
       next(err);
     }
@@ -281,7 +295,8 @@ assetsRouter.put(
         action: "CONTROL_LINKED_ASSET", entityType: "Asset", entityId: id,
         metadata: { controlId }, req,
       });
-      ok(res, result);
+      const risk = await onAssetChanged(ctx, id, "CONTROL_CHANGED", req);
+      ok(res, { ...result, riskChanged: risk.changed[0] ?? null });
     } catch (err) {
       next(err);
     }
@@ -301,7 +316,8 @@ assetsRouter.delete(
         action: "CONTROL_UNLINKED_ASSET", entityType: "Asset", entityId: id,
         metadata: { controlId }, req,
       });
-      ok(res, result);
+      const risk = await onAssetChanged(ctx, id, "CONTROL_CHANGED", req);
+      ok(res, { ...result, riskChanged: risk.changed[0] ?? null });
     } catch (err) {
       next(err);
     }
