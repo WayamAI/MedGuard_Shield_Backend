@@ -83,10 +83,17 @@ describe("assessment and risk history", () => {
   /**
    * A recompute that moved nothing is not history. Recording it would bury the
    * changes that matter under rows saying "still 8.64".
+   *
+   * The first recompute *does* move the score, because the seeded exposure and
+   * control gap were never derived. The second has nothing left to change, and
+   * that is the one asserted here.
    */
   it("does not write a history row when a recompute changes nothing", async () => {
     await request(app).post(`/api/assets/${ids.ehrId}/recompute`).set(auth(analyst));
-    expect(await prisma.riskHistory.count()).toBe(0);
+    const afterFirst = await prisma.riskHistory.count();
+
+    await request(app).post(`/api/assets/${ids.ehrId}/recompute`).set(auth(analyst));
+    expect(await prisma.riskHistory.count()).toBe(afterFirst);
   });
 
   it("still refuses to invent a first assessment via recompute", async () => {

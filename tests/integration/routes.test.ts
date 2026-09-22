@@ -161,10 +161,19 @@ describe("GET /api/risks", () => {
 });
 
 describe("POST /api/risks/:assetId/recompute", () => {
-  it("rescores from stored inputs and reports the previous value", async () => {
+  /**
+   * Recompute keeps the assessor's likelihood and impact and re-derives
+   * exposure and control gap. The seeded EHR is encrypted, MFA-protected,
+   * holds 1,000 PHI records and has no vendors, grants or controls, so both
+   * derived factors land at their floor and ceiling respectively:
+   * exposure 1, controlGap 5 (nothing effective is in place).
+   *
+   *   likelihood 4 x impact 5 x exposure 1 x controlGap 5 = 100 -> 16 LOW
+   */
+  it("keeps judgement, re-derives the observable factors", async () => {
     await prisma.risk.updateMany({
       where: { assetId: ids.ehrId },
-      data: { likelihood: 5, impact: 5, exposure: 5, controlGap: 4 },
+      data: { likelihood: 4, impact: 5, exposure: 4, controlGap: 4 },
     });
 
     const res = await request(app)
@@ -173,17 +182,31 @@ describe("POST /api/risks/:assetId/recompute", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toMatchObject({
+      subjectType: "ASSET",
       assetName: "Test EHR",
-      score: 80,
-      band: "CRITICAL",
-      previous: { score: 8.64, band: "LOW" },
+      likelihood: 4,
+      impact: 5,
+      exposure: 1,
+      controlGap: 5,
+      score: 16,
+      band: "LOW",
     });
   });
 
   it("persists the recomputed value rather than only returning it", async () => {
+    await prisma.risk.updateMany({
+      where: { assetId: ids.ehrId },
+      data: { likelihood: 4, impact: 5, exposure: 4, controlGap: 4 },
+    });
+
+    await request(app)
+      .post(`/api/risks/${ids.ehrId}/recompute`)
+      .set("Authorization", `Bearer ${token}`);
+
     const stored = await prisma.risk.findFirst({ where: { assetId: ids.ehrId } });
-    expect(stored?.score).toBe(80);
-    expect(stored?.band).toBe("CRITICAL");
+    expect(stored?.score).toBe(16);
+    expect(stored?.exposure).toBe(1);
+    expect(stored?.controlGap).toBe(5);
   });
 
   it("404s when the asset does not exist", async () => {

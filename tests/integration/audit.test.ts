@@ -200,16 +200,42 @@ describe("GET /api/audit", () => {
   });
 
   it("filters to one entity for a detail page's history tab", async () => {
+    // phiVolume feeds the derived exposure factor, so this edit produces two
+    // events against the same entity: the edit itself, and the automatic
+    // rescore it caused. Both belong on the asset's history tab.
+    //
+    // 300,000 crosses the top PHI-volume threshold, so the derivation has
+    // something to say about it -- rules contributing nothing are left out of
+    // the explanation rather than padding it with "0 points".
     await request(app).patch(`/api/assets/${ids.ehrId}`)
-      .set("Authorization", `Bearer ${admin}`).send({ phiVolume: 1 });
+      .set("Authorization", `Bearer ${admin}`).send({ phiVolume: 300_000 });
 
     const res = await request(app)
       .get(`/api/assets/${ids.ehrId}/history`)
       .set("Authorization", `Bearer ${admin}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(1);
-    expect(res.body.data[0].action).toBe("ASSET_UPDATED");
+
+    const actions = res.body.data.map((e: { action: string }) => e.action);
+    expect(actions).toContain("ASSET_UPDATED");
+    expect(actions).toContain("RISK_RECOMPUTED");
+
+    const rescore = res.body.data.find((e: { action: string }) => e.action === "RISK_RECOMPUTED");
+    expect(rescore.metadata.trigger).toBe("automatic");
+    expect(rescore.metadata.derivation).toContain("PHI records");
+  });
+
+  it("records a purely descriptive edit without a rescore", async () => {
+    // Renaming cannot move a score, so it must not manufacture a risk event.
+    await request(app).patch(`/api/assets/${ids.ehrId}`)
+      .set("Authorization", `Bearer ${admin}`).send({ name: "Renamed Only" });
+
+    const res = await request(app)
+      .get(`/api/assets/${ids.ehrId}/history`)
+      .set("Authorization", `Bearer ${admin}`);
+
+    const actions = res.body.data.map((e: { action: string }) => e.action);
+    expect(actions).toEqual(["ASSET_UPDATED"]);
   });
 
   it("offers no write path at all", async () => {

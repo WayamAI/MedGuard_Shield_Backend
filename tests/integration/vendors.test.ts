@@ -172,7 +172,21 @@ describe("vendor writes follow the same RBAC rules as assets", () => {
 });
 
 describe("POST /api/vendors/:id/recompute", () => {
-  it("reuses the shared risk engine and reports the previous score", async () => {
+  /**
+   * Recompute keeps the assessor's likelihood and impact and re-derives
+   * exposure and control gap from what is actually recorded. For this vendor:
+   *
+   *   exposure   1 reachable asset holding 1,000 PHI records, none of it
+   *              unencrypted -> 2 points -> 2
+   *   controlGap BAA is MISSING -> 5 (already the maximum, so the overdue
+   *              assessment adds nothing)
+   *
+   *   3 x 3 x 2 x 5 = 90 -> 90/625 x 100 = 14.4 -> LOW
+   *
+   * The stored 3/3 for exposure/controlGap are deliberately ignored: they were
+   * never pinned, so the derivation owns them.
+   */
+  it("keeps judgement, re-derives the observable factors, and reports the previous score", async () => {
     await prisma.vendorRisk.updateMany({
       where: { vendorId },
       data: { likelihood: 3, impact: 3, exposure: 3, controlGap: 3 },
@@ -182,13 +196,20 @@ describe("POST /api/vendors/:id/recompute", () => {
       .set("Authorization", `Bearer ${tokens.ADMIN}`);
 
     expect(res.status).toBe(200);
-    // Same formula as asset risk: 3*3*3*3 = 81 -> 12.96 LOW.
     expect(res.body.data).toMatchObject({
+      subjectType: "VENDOR",
       vendorName: "Test Vendor",
-      score: 12.96,
+      likelihood: 3,
+      impact: 3,
+      exposure: 2,
+      controlGap: 5,
+      score: 14.4,
       band: "LOW",
       previous: { score: 100, band: "EXTREME" },
     });
+
+    // And it says why, from recorded facts rather than a narrative.
+    expect(res.body.data.derivation).toContain("BAA is MISSING");
   });
 
   it("persists the recomputed value", async () => {
@@ -200,7 +221,9 @@ describe("POST /api/vendors/:id/recompute", () => {
       .set("Authorization", `Bearer ${tokens.ADMIN}`);
 
     const stored = await prisma.vendorRisk.findFirst({ where: { vendorId } });
-    expect(stored?.score).toBe(12.96);
+    expect(stored?.score).toBe(14.4);
+    expect(stored?.exposure).toBe(2);
+    expect(stored?.controlGap).toBe(5);
   });
 
   it("refuses VIEWER", async () => {
