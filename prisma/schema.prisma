@@ -167,6 +167,22 @@ enum RiskChangeReason {
   MANUAL_ASSESSMENT
   RECOMPUTE
   IMPORTED
+  ASSET_CHANGED
+  PHI_CHANGED
+  ACCESS_CHANGED
+  VENDOR_ACCESS_CHANGED
+  CONTROL_CHANGED
+  THREAT_CHANGED
+}
+
+/// Whether a risk record describes an asset or a vendor.
+///
+/// RiskHistory is shared between the two rather than duplicated: the four
+/// factors, the formula, the bands and the audit requirements are identical,
+/// and two tables would mean two places to forget to write a row.
+enum RiskSubject {
+  ASSET
+  VENDOR
 }
 
 /// Audit vocabulary. An enum rather than free text so a typo cannot create a
@@ -437,8 +453,20 @@ model Risk {
   score          Float
   band           RiskBand
   computedAt     DateTime @default(now())
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @default(now()) @updatedAt
+
+  /// Exposure and control gap are *derived* from observable facts -- how much
+  /// PHI is held, who can reach it, what protects it -- and are recomputed
+  /// automatically when those facts change. Likelihood and impact stay pure
+  /// assessor judgement, because no amount of graph data tells you how
+  /// motivated an attacker is or what a breach would cost.
+  ///
+  /// An assessor who supplies exposure or controlGap explicitly pins it:
+  /// the flag goes true and automatic recomputation leaves that factor alone
+  /// until it is unpinned. Their judgement outranks the derivation.
+  exposureOverridden   Boolean  @default(false)
+  controlGapOverridden Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @default(now()) @updatedAt
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   asset        Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
@@ -460,8 +488,14 @@ model Risk {
 model RiskHistory {
   id             Int              @id @default(autoincrement())
   organizationId Int
+  /// Which kind of subject this row describes. Exactly one of assetId /
+  /// vendorId is set, and `subjectType` says which -- checked in
+  /// riskEngine.ts, which is the only writer.
+  subjectType    RiskSubject      @default(ASSET)
   riskId         Int?
-  assetId        Int
+  vendorRiskId   Int?
+  assetId        Int?
+  vendorId       Int?
   previousScore  Float?
   previousBand   RiskBand?
   score          Float
@@ -476,11 +510,15 @@ model RiskHistory {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   risk         Risk?        @relation(fields: [riskId], references: [id], onDelete: SetNull)
-  asset        Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  vendorRisk   VendorRisk?  @relation(fields: [vendorRiskId], references: [id], onDelete: SetNull)
+  asset        Asset?       @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  vendor       Vendor?      @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   changedBy    User?        @relation(fields: [changedById], references: [id], onDelete: SetNull)
 
   @@index([organizationId])
   @@index([assetId, changedAt])
+  @@index([vendorId, changedAt])
+  @@index([subjectType, changedAt])
   @@index([changedAt])
 }
 
@@ -501,6 +539,7 @@ model Vendor {
   organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   assetAccess  VendorAssetAccess[]
   risks        VendorRisk[]
+  riskHistory  RiskHistory[]
   remediations Remediation[]
 
   @@unique([organizationId, name])
@@ -537,11 +576,18 @@ model VendorRisk {
   score          Float
   band           RiskBand
   computedAt     DateTime @default(now())
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @default(now()) @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  vendor       Vendor       @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  /// Same split as Risk. A vendor's exposure follows the assets it can reach
+  /// and its BAA state; its control gap follows the same. Likelihood and
+  /// impact remain judgement.
+  exposureOverridden   Boolean  @default(false)
+  controlGapOverridden Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @default(now()) @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vendor       Vendor        @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  history      RiskHistory[]
 
   @@unique([vendorId])
   @@index([organizationId])
@@ -663,7 +709,7 @@ model Control {
   updatedAt      DateTime             @default(now()) @updatedAt
   archivedAt     DateTime?
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   assets       AssetControl[]
   policies     PolicyControl[]
   remediations Remediation[]
