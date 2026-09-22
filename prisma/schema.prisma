@@ -1,7 +1,13 @@
-// MedGuard — PHI risk-intelligence data model (demo scope).
+// Drishti — Healthcare PHI risk-intelligence data model.
 //
-// Deliberately minimal: no multi-tenancy. Every asset belongs to the single
-// demo organisation, so there is no orgId anywhere.
+// Tenancy: every customer-owned record carries `organizationId` directly, even
+// where it could be derived through a parent. The denormalisation is deliberate
+// — it makes the tenant filter a single indexed predicate on every query rather
+// than a join, so a missed scope is a visible omission rather than a subtle one.
+//
+// The two pure join tables (AssetPHI, VendorAssetAccess) are the exception:
+// they have composite primary keys and are only ever reached through an
+// already-scoped parent, so they inherit scope rather than storing it.
 
 generator client {
   provider = "prisma-client"
@@ -88,9 +94,187 @@ enum RiskBand {
   EXTREME
 }
 
+/// Which safeguard family a control belongs to. Deliberately a short list of
+/// operational categories rather than a compliance framework's taxonomy —
+/// framework mapping is a free-text field on Control, not an enum, precisely
+/// so claiming "HIPAA §164.312(a)(1)" stays a recorded reference and never
+/// becomes a certification claim the system makes on its own.
+enum ControlCategory {
+  ACCESS
+  ENCRYPTION
+  MONITORING
+  GOVERNANCE
+  RESILIENCE
+  VENDOR
+}
+
+/// How far along an organisation is in actually operating a control.
+enum ControlStatus {
+  IMPLEMENTED
+  PARTIAL
+  PLANNED
+  NOT_IMPLEMENTED
+}
+
+/// Assessed effectiveness, separate from status: a control can be fully
+/// implemented and still ineffective, which is exactly the finding worth
+/// surfacing. NOT_ASSESSED is the honest default — it is not "effective".
+enum ControlEffectiveness {
+  EFFECTIVE
+  PARTIALLY_EFFECTIVE
+  INEFFECTIVE
+  NOT_ASSESSED
+}
+
+enum RemediationStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  ACCEPTED
+  REOPENED
+}
+
+enum RemediationSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// What surfaced a finding. Drives how the UI groups remediation work and
+/// which entity link is expected to be populated.
+enum FindingSource {
+  RISK
+  THREAT
+  ACCESS
+  VENDOR
+  CONTROL
+  MANUAL
+}
+
+enum PolicyStatus {
+  DRAFT
+  ACTIVE
+  UNDER_REVIEW
+  ARCHIVED
+}
+
+/// Why a score moved. Recorded from the call site that actually performed the
+/// change — never inferred after the fact, so a history row cannot claim a
+/// cause the system did not observe.
+enum RiskChangeReason {
+  INITIAL_ASSESSMENT
+  MANUAL_ASSESSMENT
+  RECOMPUTE
+  IMPORTED
+}
+
+/// Audit vocabulary. An enum rather than free text so a typo cannot create a
+/// silently unqueryable action, at the cost of a migration to add one.
+enum AuditAction {
+  LOGIN
+  LOGIN_FAILED
+  LOGOUT
+  TOKEN_REFRESHED
+  TOKEN_REVOKED
+  ASSET_CREATED
+  ASSET_UPDATED
+  ASSET_ARCHIVED
+  ASSET_RESTORED
+  RISK_CREATED
+  RISK_UPDATED
+  RISK_RECOMPUTED
+  VENDOR_CREATED
+  VENDOR_UPDATED
+  VENDOR_ARCHIVED
+  VENDOR_RESTORED
+  IDENTITY_CREATED
+  IDENTITY_UPDATED
+  IDENTITY_ARCHIVED
+  ACCESS_GRANTED
+  ACCESS_UPDATED
+  ACCESS_REVOKED
+  ACCESS_REVIEWED
+  THREAT_CREATED
+  THREAT_UPDATED
+  THREAT_STATUS_CHANGED
+  CONTROL_CREATED
+  CONTROL_UPDATED
+  CONTROL_ARCHIVED
+  CONTROL_LINKED_ASSET
+  CONTROL_UNLINKED_ASSET
+  POLICY_CREATED
+  POLICY_UPDATED
+  POLICY_ARCHIVED
+  REMEDIATION_CREATED
+  REMEDIATION_UPDATED
+  REMEDIATION_ASSIGNED
+  REMEDIATION_RESOLVED
+  REMEDIATION_REOPENED
+  IMPORT_STARTED
+  IMPORT_COMPLETED
+  IMPORT_FAILED
+}
+
+enum AuditResult {
+  SUCCESS
+  FAILURE
+}
+
+// ---------------------------------------------------------------- tenancy
+
+/// A customer. The tenant boundary: every scoped query filters on this id, and
+/// the id is taken from the caller's verified session, never from the request.
+model Organization {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  members      OrganizationMember[]
+  assets       Asset[]
+  phiTypes     PHIType[]
+  dataFlows    DataFlow[]
+  risks        Risk[]
+  riskHistory  RiskHistory[]
+  vendors      Vendor[]
+  vendorRisks  VendorRisk[]
+  identities   Identity[]
+  accessGrants AccessGrant[]
+  threats      Threat[]
+  controls     Control[]
+  policies     Policy[]
+  remediations Remediation[]
+  auditEvents  AuditEvent[]
+
+  @@index([slug])
+}
+
+/// Membership of a user in an organisation, with the role that applies there.
+///
+/// `User.role` remains as the account's default role; this is the role that
+/// actually governs a request, because authorisation is always evaluated
+/// inside an organisation. A user may belong to more than one.
+model OrganizationMember {
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  organizationId Int
+  role           Role     @default(VIEWER)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
 // ---------------------------------------------------------------- models
 
-/// An account that can sign into MedGuard itself. Distinct from Identity,
+/// An account that can sign into Drishti itself. Distinct from Identity,
 /// which is a person or service account that holds PHI access elsewhere.
 ///
 /// Both credential columns stay optional because exactly one is ever
@@ -103,8 +287,38 @@ model User {
   externalAuthId String?  @unique
   role           Role     @default(VIEWER)
   createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
+
+  memberships   OrganizationMember[]
+  refreshTokens RefreshToken[]
+  auditEvents   AuditEvent[]
+  riskChanges   RiskHistory[]
+  ownedWork     Remediation[]        @relation("RemediationOwner")
 
   @@index([role])
+}
+
+/// One issued refresh token, stored as a SHA-256 hash so a database read
+/// cannot be replayed as a session. Rotation is recorded through
+/// `replacedByTokenHash`, which is what makes reuse of an already-rotated
+/// token detectable rather than merely invalid.
+model RefreshToken {
+  id                  Int       @id @default(autoincrement())
+  userId              Int
+  organizationId      Int
+  tokenHash           String    @unique
+  expiresAt           DateTime
+  createdAt           DateTime  @default(now())
+  revokedAt           DateTime?
+  replacedByTokenHash String?
+  userAgent           String?
+  ip                  String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([revokedAt])
 }
 
 /// A system that stores or processes PHI. The four control columns
@@ -112,42 +326,64 @@ model User {
 /// inputs are argued from during an assessment.
 model Asset {
   id             Int       @id @default(autoincrement())
-  name           String    @unique
+  organizationId Int
+  name           String
   type           AssetType
   phiVolume      Int       @default(0)
   encrypted      Boolean   @default(false)
   mfaEnabled     Boolean   @default(false)
   lastAssessedAt DateTime?
   createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
+  /// Archive rather than delete: an asset that held PHI stays part of the
+  /// record even once decommissioned. Nothing in the codebase hard-deletes one.
+  archivedAt     DateTime?
 
+  organization  Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   phiTypes      AssetPHI[]
-  outboundFlows DataFlow[] @relation("FlowSource")
-  inboundFlows  DataFlow[] @relation("FlowTarget")
+  outboundFlows DataFlow[]          @relation("FlowSource")
+  inboundFlows  DataFlow[]          @relation("FlowTarget")
   risks         Risk[]
+  riskHistory   RiskHistory[]
   vendorAccess  VendorAssetAccess[]
   accessGrants  AccessGrant[]
   threats       Threat[]
+  controls      AssetControl[]
+  remediations  Remediation[]
 
+  /// Name is unique per organisation, not globally — two customers may each
+  /// run something called "Patient Portal".
+  @@unique([organizationId, name])
+  @@index([organizationId])
   @@index([type])
+  @@index([archivedAt])
 }
 
 /// A category of protected health information, e.g. Clinical or Genetic.
 model PHIType {
-  id          Int         @id @default(autoincrement())
-  name        String      @unique
-  sensitivity Sensitivity
+  id             Int         @id @default(autoincrement())
+  organizationId Int
+  name           String
+  sensitivity    Sensitivity
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @default(now()) @updatedAt
 
-  links  AssetPHI[]
-  flows  DataFlow[]
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  links        AssetPHI[]
+  flows        DataFlow[]
 
+  @@unique([organizationId, name])
+  @@index([organizationId])
   @@index([sensitivity])
 }
 
 /// Which PHI categories live in which asset, and at what daily volume.
+/// Scope is inherited from the asset.
 model AssetPHI {
   assetId       Int
   phiTypeId     Int
-  recordsPerDay Int @default(0)
+  recordsPerDay Int      @default(0)
+  createdAt     DateTime @default(now())
 
   asset   Asset   @relation(fields: [assetId], references: [id], onDelete: Cascade)
   phiType PHIType @relation(fields: [phiTypeId], references: [id], onDelete: Cascade)
@@ -159,41 +395,93 @@ model AssetPHI {
 /// A directed movement of PHI between two assets. Drives the Sankey:
 /// recordsPerDay sets ribbon width, encrypted sets ribbon tone.
 model DataFlow {
-  id            Int     @id @default(autoincrement())
-  sourceAssetId Int
-  targetAssetId Int
-  phiTypeId     Int
-  recordsPerDay Int
-  encrypted     Boolean @default(true)
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  sourceAssetId  Int
+  targetAssetId  Int
+  phiTypeId      Int
+  recordsPerDay  Int
+  encrypted      Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
 
-  sourceAsset Asset   @relation("FlowSource", fields: [sourceAssetId], references: [id], onDelete: Cascade)
-  targetAsset Asset   @relation("FlowTarget", fields: [targetAssetId], references: [id], onDelete: Cascade)
-  phiType     PHIType @relation(fields: [phiTypeId], references: [id], onDelete: Restrict)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceAsset  Asset        @relation("FlowSource", fields: [sourceAssetId], references: [id], onDelete: Cascade)
+  targetAsset  Asset        @relation("FlowTarget", fields: [targetAssetId], references: [id], onDelete: Cascade)
+  phiType      PHIType      @relation(fields: [phiTypeId], references: [id], onDelete: Restrict)
 
+  /// The natural key the import system already enforces in application code.
+  /// Backed by a constraint so two concurrent imports cannot both insert it.
+  @@unique([sourceAssetId, targetAssetId, phiTypeId])
+  @@index([organizationId])
   @@index([sourceAssetId])
   @@index([targetAssetId])
   @@index([phiTypeId])
 }
 
-/// A scored risk for one asset. The four 1-5 inputs are the assessor's
-/// judgement; score and band are derived by src/services/riskEngine.ts and
-/// must never be written by hand.
+/// The current scored risk for one asset. The four 1-5 inputs are the
+/// assessor's judgement; score and band are derived by
+/// src/services/riskEngine.ts and must never be written by hand.
+///
+/// One row per asset, enforced by the database. Movement over time lives in
+/// RiskHistory rather than in extra rows here, so "the asset's risk" is a
+/// single unambiguous record.
 model Risk {
-  id          Int      @id @default(autoincrement())
-  assetId     Int
-  likelihood  Int
-  impact      Int
-  exposure    Int
-  controlGap  Int
-  score       Float
-  band        RiskBand
-  computedAt  DateTime @default(now())
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  assetId        Int
+  likelihood     Int
+  impact         Int
+  exposure       Int
+  controlGap     Int
+  score          Float
+  band           RiskBand
+  computedAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
 
-  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  asset        Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  history      RiskHistory[]
 
-  @@index([assetId])
+  @@unique([assetId])
+  @@index([organizationId])
   @@index([band])
   @@index([computedAt])
+}
+
+/// One recorded movement of an asset's risk score.
+///
+/// Written only by the risk engine, at the moment the change is made, with the
+/// reason supplied by the caller that made it. `reason` is an enum of things
+/// the system actually observes — there is deliberately no free-text
+/// explanation field, because a narrative the backend cannot substantiate is
+/// worse than no narrative.
+model RiskHistory {
+  id             Int              @id @default(autoincrement())
+  organizationId Int
+  riskId         Int?
+  assetId        Int
+  previousScore  Float?
+  previousBand   RiskBand?
+  score          Float
+  band           RiskBand
+  likelihood     Int
+  impact         Int
+  exposure       Int
+  controlGap     Int
+  reason         RiskChangeReason
+  changedById    Int?
+  changedAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  risk         Risk?        @relation(fields: [riskId], references: [id], onDelete: SetNull)
+  asset        Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  changedBy    User?        @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([assetId, changedAt])
+  @@index([changedAt])
 }
 
 /// A third party with access to PHI. Vendor risk is scored with the same
@@ -201,21 +489,29 @@ model Risk {
 /// and bands are identical, so one change of thresholds moves both.
 model Vendor {
   id             Int       @id @default(autoincrement())
-  name           String    @unique
+  organizationId Int
+  name           String
   baaStatus      BaaStatus @default(MISSING)
   phiVolume      Int       @default(0)
   lastAssessedAt DateTime?
   createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
+  archivedAt     DateTime?
 
-  assetAccess VendorAssetAccess[]
-  risks       VendorRisk[]
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assetAccess  VendorAssetAccess[]
+  risks        VendorRisk[]
+  remediations Remediation[]
 
+  @@unique([organizationId, name])
+  @@index([organizationId])
   @@index([baaStatus])
+  @@index([archivedAt])
 }
 
 /// Which assets a vendor can reach. Access is the thing that turns a paper
 /// compliance gap into an actual exposure, so it is modelled explicitly
-/// rather than inferred from data flows.
+/// rather than inferred from data flows. Scope inherited from the vendor.
 model VendorAssetAccess {
   vendorId  Int
   assetId   Int
@@ -228,82 +524,284 @@ model VendorAssetAccess {
   @@index([assetId])
 }
 
-/// Scored risk for a vendor. Mirrors Risk, deliberately: same four 1-5
-/// inputs, same derived score and band, same rule that score and band are
-/// never written by hand.
+/// Current scored risk for a vendor. Mirrors Risk, deliberately: same four
+/// 1-5 inputs, same derived score and band, same one-row-per-subject rule.
 model VendorRisk {
-  id         Int      @id @default(autoincrement())
-  vendorId   Int
-  likelihood Int
-  impact     Int
-  exposure   Int
-  controlGap Int
-  score      Float
-  band       RiskBand
-  computedAt DateTime @default(now())
+  id             Int      @id @default(autoincrement())
+  organizationId Int
+  vendorId       Int
+  likelihood     Int
+  impact         Int
+  exposure       Int
+  controlGap     Int
+  score          Float
+  band           RiskBand
+  computedAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt
 
-  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vendor       Vendor       @relation(fields: [vendorId], references: [id], onDelete: Cascade)
 
-  @@index([vendorId])
+  @@unique([vendorId])
+  @@index([organizationId])
   @@index([band])
 }
 
 /// A person or service account that can reach PHI. Distinct from User, which
-/// is an account that can log into MedGuard itself -- most identities here
+/// is an account that can log into Drishti itself -- most identities here
 /// never log into this tool at all.
 model Identity {
-  id          Int          @id @default(autoincrement())
-  displayName String
-  email       String?      @unique
-  kind        IdentityKind @default(USER)
-  department  String?
-  role        Role         @default(VIEWER)
-  active      Boolean      @default(true)
-  mfaEnabled  Boolean      @default(false)
-  createdAt   DateTime     @default(now())
+  id             Int          @id @default(autoincrement())
+  organizationId Int
+  displayName    String
+  email          String?
+  kind           IdentityKind @default(USER)
+  department     String?
+  role           Role         @default(VIEWER)
+  active         Boolean      @default(true)
+  mfaEnabled     Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @default(now()) @updatedAt
+  archivedAt     DateTime?
 
-  grants AccessGrant[]
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  grants       AccessGrant[]
+  remediations Remediation[]
 
+  /// Display name is unique per organisation. The import system resolves
+  /// identities by this name and previously had to treat duplicates as
+  /// ambiguous; the constraint makes that case unrepresentable.
+  @@unique([organizationId, displayName])
+  @@unique([organizationId, email])
+  @@index([organizationId])
   @@index([kind])
   @@index([active])
+  @@index([archivedAt])
 }
 
 /// One identity's access to one asset. lastUsedAt is the field that matters:
 /// a grant nobody has exercised in months is the classic over-privilege
 /// finding, and it cannot be spotted without recording use separately from
 /// the grant date.
+///
+/// Revocation is recorded, not deleted — who lost which access and when is
+/// exactly the question an access review has to answer later.
 model AccessGrant {
-  id         Int         @id @default(autoincrement())
-  identityId Int
-  assetId    Int
-  level      AccessLevel @default(READ)
-  grantedAt  DateTime    @default(now())
-  lastUsedAt DateTime?
+  id             Int         @id @default(autoincrement())
+  organizationId Int
+  identityId     Int
+  assetId        Int
+  level          AccessLevel @default(READ)
+  grantedAt      DateTime    @default(now())
+  lastUsedAt     DateTime?
+  lastReviewedAt DateTime?
+  revokedAt      DateTime?
+  revokedById    Int?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @default(now()) @updatedAt
 
-  identity Identity @relation(fields: [identityId], references: [id], onDelete: Cascade)
-  asset    Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  identity     Identity      @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  asset        Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  remediations Remediation[]
 
   @@unique([identityId, assetId])
+  @@index([organizationId])
   @@index([assetId])
   @@index([lastUsedAt])
+  @@index([revokedAt])
 }
 
 /// A detected threat against an asset. Minimal by design -- enough to drive
-/// the threat feed, not a full incident-response record.
+/// the threat feed and its triage lifecycle, not a full incident-response
+/// record. Every status change is written to AuditEvent.
 model Threat {
-  id          Int             @id @default(autoincrement())
-  assetId     Int
-  severity    ThreatSeverity
-  status      ThreatStatus    @default(OPEN)
-  title       String
-  description String
-  detectedAt  DateTime        @default(now())
-  resolvedAt  DateTime?
+  id             Int            @id @default(autoincrement())
+  organizationId Int
+  assetId        Int
+  severity       ThreatSeverity
+  status         ThreatStatus   @default(OPEN)
+  title          String
+  description    String
+  detectedAt     DateTime       @default(now())
+  resolvedAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @default(now()) @updatedAt
 
-  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  asset        Asset         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  remediations Remediation[]
 
+  @@unique([assetId, title])
+  @@index([organizationId])
   @@index([assetId])
   @@index([severity])
   @@index([status])
   @@index([detectedAt])
+}
+
+/// A safeguard the organisation operates. Controls are the missing half of
+/// the risk model: `controlGap` has always been an assessor's number, and a
+/// Control record is what that number is meant to be argued from.
+///
+/// `frameworkRef` is free text and purely a reference the customer typed
+/// (e.g. "HIPAA 164.312(a)(1)"). Drishti does not assert compliance with
+/// anything on the strength of it.
+model Control {
+  id             Int                  @id @default(autoincrement())
+  organizationId Int
+  name           String
+  description    String
+  category       ControlCategory
+  status         ControlStatus        @default(NOT_IMPLEMENTED)
+  effectiveness  ControlEffectiveness @default(NOT_ASSESSED)
+  owner          String?
+  frameworkRef   String?
+  lastReviewedAt DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @default(now()) @updatedAt
+  archivedAt     DateTime?
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assets       AssetControl[]
+  policies     PolicyControl[]
+  remediations Remediation[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([category])
+  @@index([status])
+  @@index([archivedAt])
+}
+
+/// Which controls are applied to which asset. This is the join that lets the
+/// UI show, for one asset, what is actually protecting it.
+model AssetControl {
+  assetId   Int
+  controlId Int
+  createdAt DateTime @default(now())
+
+  asset   Asset   @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  control Control @relation(fields: [controlId], references: [id], onDelete: Cascade)
+
+  @@id([assetId, controlId])
+  @@index([controlId])
+}
+
+/// A written policy, and the controls that implement it. Deliberately small —
+/// this is a register, not a GRC platform.
+model Policy {
+  id             Int          @id @default(autoincrement())
+  organizationId Int
+  name           String
+  description    String
+  status         PolicyStatus @default(DRAFT)
+  owner          String?
+  evidenceRef    String?
+  reviewDueAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @default(now()) @updatedAt
+  archivedAt     DateTime?
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  controls     PolicyControl[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([status])
+  @@index([archivedAt])
+}
+
+model PolicyControl {
+  policyId  Int
+  controlId Int
+  createdAt DateTime @default(now())
+
+  policy  Policy  @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  control Control @relation(fields: [controlId], references: [id], onDelete: Cascade)
+
+  @@id([policyId, controlId])
+  @@index([controlId])
+}
+
+/// A finding and the work to close it.
+///
+/// Every entity link is optional and at most one is normally set; `source`
+/// says which one to expect. Links are `SetNull` on delete rather than
+/// Cascade: the finding that an asset was unencrypted remains true, and
+/// remains worth keeping, even after the asset record goes away.
+model Remediation {
+  id             Int                 @id @default(autoincrement())
+  organizationId Int
+  title          String
+  description    String
+  recommendation String
+  severity       RemediationSeverity @default(MEDIUM)
+  status         RemediationStatus   @default(OPEN)
+  source         FindingSource       @default(MANUAL)
+
+  ownerId Int?
+  dueAt   DateTime?
+
+  assetId       Int?
+  vendorId      Int?
+  threatId      Int?
+  controlId     Int?
+  identityId    Int?
+  accessGrantId Int?
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now()) @updatedAt
+  resolvedAt DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner        User?        @relation("RemediationOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  asset        Asset?       @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  vendor       Vendor?      @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  threat       Threat?      @relation(fields: [threatId], references: [id], onDelete: SetNull)
+  control      Control?     @relation(fields: [controlId], references: [id], onDelete: SetNull)
+  identity     Identity?    @relation(fields: [identityId], references: [id], onDelete: SetNull)
+  accessGrant  AccessGrant? @relation(fields: [accessGrantId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([severity])
+  @@index([ownerId])
+  @@index([dueAt])
+  @@index([assetId])
+  @@index([vendorId])
+}
+
+/// The immutable record of who did what.
+///
+/// Append-only by convention: nothing in the codebase updates or deletes an
+/// AuditEvent. `actorEmail` is denormalised so the trail survives the user
+/// record being removed, and `actorUserId` is SetNull for the same reason.
+///
+/// `metadata` carries the specifics of a change (which fields moved, from what
+/// to what). It must never carry credentials, tokens, or PHI values — see
+/// src/services/auditService.ts, which is the only writer.
+model AuditEvent {
+  id             Int         @id @default(autoincrement())
+  organizationId Int?
+  actorUserId    Int?
+  actorEmail     String?
+  action         AuditAction
+  entityType     String?
+  entityId       Int?
+  result         AuditResult @default(SUCCESS)
+  metadata       Json?
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime    @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?         @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@index([createdAt])
 }
