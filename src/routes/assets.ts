@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
-import { ctxOf, requireRole } from "../middleware/auth.js";
+import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery, sortOrder } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
@@ -52,10 +52,6 @@ const assessmentBody = z.object({
   controlGap: z.number().int().min(1).max(5),
 });
 
-/** Writes are restricted; reads are open to any signed-in role. */
-const canWrite = requireRole(["ADMIN", "ANALYST"]);
-/** Archiving removes an asset from the working inventory -- ADMIN only. */
-const adminOnly = requireRole(["ADMIN"]);
 
 assetsRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
@@ -77,7 +73,7 @@ assetsRouter.get("/:id", validate({ params: idParam }), async (req, res, next) =
   }
 });
 
-assetsRouter.post("/", canWrite, validate({ body: createBody }), async (req, res, next) => {
+assetsRouter.post("/", requirePermission("asset:create"), validate({ body: createBody }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const asset = await createAsset(ctx, createBody.parse(req.body));
@@ -96,7 +92,7 @@ assetsRouter.post("/", canWrite, validate({ body: createBody }), async (req, res
 
 assetsRouter.patch(
   "/:id",
-  canWrite,
+  requirePermission("asset:update"),
   validate({ params: idParam, body: patchBody }),
   async (req, res, next) => {
     try {
@@ -126,7 +122,7 @@ assetsRouter.patch(
  * threats, grants and risk history away is exactly what an auditor would ask
  * us to explain.
  */
-assetsRouter.post("/:id/archive", adminOnly, validate({ params: idParam }), async (req, res, next) => {
+assetsRouter.post("/:id/archive", requirePermission("asset:archive"), validate({ params: idParam }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const { id } = idParam.parse(req.params);
@@ -141,7 +137,7 @@ assetsRouter.post("/:id/archive", adminOnly, validate({ params: idParam }), asyn
   }
 });
 
-assetsRouter.post("/:id/restore", adminOnly, validate({ params: idParam }), async (req, res, next) => {
+assetsRouter.post("/:id/restore", requirePermission("asset:archive"), validate({ params: idParam }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const { id } = idParam.parse(req.params);
@@ -162,7 +158,7 @@ assetsRouter.post("/:id/restore", adminOnly, validate({ params: idParam }), asyn
  */
 assetsRouter.post(
   "/:id/assessment",
-  canWrite,
+  requirePermission("asset:assess"),
   validate({ params: idParam, body: assessmentBody }),
   async (req, res, next) => {
     try {
@@ -191,7 +187,7 @@ assetsRouter.post(
 
 assetsRouter.post(
   "/:id/recompute",
-  canWrite,
+  requirePermission("asset:assess"),
   validate({ params: idParam }),
   async (req, res, next) => {
     try {
@@ -274,7 +270,7 @@ const controlLinkParams = z.object({
 
 assetsRouter.put(
   "/:id/controls/:controlId",
-  canWrite,
+  requirePermission("asset:link-control"),
   validate({ params: controlLinkParams }),
   async (req, res, next) => {
     try {
@@ -294,7 +290,7 @@ assetsRouter.put(
 
 assetsRouter.delete(
   "/:id/controls/:controlId",
-  canWrite,
+  requirePermission("asset:link-control"),
   validate({ params: controlLinkParams }),
   async (req, res, next) => {
     try {

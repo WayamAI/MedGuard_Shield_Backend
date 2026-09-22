@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
-import { ctxOf, requireRole } from "../middleware/auth.js";
+import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery, sortOrder } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
@@ -43,8 +43,6 @@ const assessmentBody = z.object({
   controlGap: z.number().int().min(1).max(5),
 });
 
-const canWrite = requireRole(["ADMIN", "ANALYST"]);
-const adminOnly = requireRole(["ADMIN"]);
 
 vendorsRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
@@ -66,7 +64,7 @@ vendorsRouter.get("/:id", validate({ params: idParam }), async (req, res, next) 
   }
 });
 
-vendorsRouter.post("/", canWrite, validate({ body: createBody }), async (req, res, next) => {
+vendorsRouter.post("/", requirePermission("vendor:create"), validate({ body: createBody }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const vendor = await createVendor(ctx, createBody.parse(req.body));
@@ -81,7 +79,7 @@ vendorsRouter.post("/", canWrite, validate({ body: createBody }), async (req, re
 });
 
 vendorsRouter.patch(
-  "/:id", canWrite, validate({ params: idParam, body: patchBody }),
+  "/:id", requirePermission("vendor:update"), validate({ params: idParam, body: patchBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -101,7 +99,7 @@ vendorsRouter.patch(
   },
 );
 
-vendorsRouter.post("/:id/archive", adminOnly, validate({ params: idParam }), async (req, res, next) => {
+vendorsRouter.post("/:id/archive", requirePermission("vendor:archive"), validate({ params: idParam }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const { id } = idParam.parse(req.params);
@@ -116,7 +114,7 @@ vendorsRouter.post("/:id/archive", adminOnly, validate({ params: idParam }), asy
   }
 });
 
-vendorsRouter.post("/:id/restore", adminOnly, validate({ params: idParam }), async (req, res, next) => {
+vendorsRouter.post("/:id/restore", requirePermission("vendor:archive"), validate({ params: idParam }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const { id } = idParam.parse(req.params);
@@ -132,7 +130,7 @@ vendorsRouter.post("/:id/restore", adminOnly, validate({ params: idParam }), asy
 });
 
 vendorsRouter.post(
-  "/:id/assessment", canWrite, validate({ params: idParam, body: assessmentBody }),
+  "/:id/assessment", requirePermission("vendor:assess"), validate({ params: idParam, body: assessmentBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -152,7 +150,7 @@ vendorsRouter.post(
 );
 
 vendorsRouter.post(
-  "/:id/recompute", canWrite, validate({ params: idParam }),
+  "/:id/recompute", requirePermission("vendor:assess"), validate({ params: idParam }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -175,7 +173,7 @@ const assetLinkParams = z.object({
 });
 
 vendorsRouter.put(
-  "/:id/assets/:assetId", canWrite, validate({ params: assetLinkParams }),
+  "/:id/assets/:assetId", requirePermission("vendor:link-asset"), validate({ params: assetLinkParams }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -193,7 +191,7 @@ vendorsRouter.put(
 );
 
 vendorsRouter.delete(
-  "/:id/assets/:assetId", canWrite, validate({ params: assetLinkParams }),
+  "/:id/assets/:assetId", requirePermission("vendor:link-asset"), validate({ params: assetLinkParams }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
-import { ctxOf, requireRole } from "../middleware/auth.js";
+import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
@@ -37,8 +37,6 @@ const patchBody = createBody.partial().refine(
   { message: "Provide at least one field to update" },
 );
 
-const canWrite = requireRole(["ADMIN", "ANALYST"]);
-const adminOnly = requireRole(["ADMIN"]);
 
 identitiesRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
@@ -60,7 +58,7 @@ identitiesRouter.get("/:id", validate({ params: idParam }), async (req, res, nex
   }
 });
 
-identitiesRouter.post("/", canWrite, validate({ body: createBody }), async (req, res, next) => {
+identitiesRouter.post("/", requirePermission("identity:create"), validate({ body: createBody }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const identity = await createIdentity(ctx, createBody.parse(req.body));
@@ -75,7 +73,7 @@ identitiesRouter.post("/", canWrite, validate({ body: createBody }), async (req,
 });
 
 identitiesRouter.patch(
-  "/:id", canWrite, validate({ params: idParam, body: patchBody }),
+  "/:id", requirePermission("identity:update"), validate({ params: idParam, body: patchBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -99,7 +97,7 @@ identitiesRouter.patch(
  * Deactivating a leaver without removing their access is the exact failure
  * this product exists to surface, so the two are not separable here.
  */
-identitiesRouter.post("/:id/archive", adminOnly, validate({ params: idParam }), async (req, res, next) => {
+identitiesRouter.post("/:id/archive", requirePermission("identity:archive"), validate({ params: idParam }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const { id } = idParam.parse(req.params);

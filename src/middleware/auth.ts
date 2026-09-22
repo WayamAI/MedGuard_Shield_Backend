@@ -2,6 +2,7 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { Role } from "../generated/prisma/client.js";
 import { ForbiddenError, UnauthorizedError, contextFor, verifyToken } from "../services/authService.js";
 import type { TenantContext } from "../lib/tenant.js";
+import { can, rolesWith, type Permission } from "../lib/permissions.js";
 
 /** Current access-token cookie. */
 export const ACCESS_COOKIE = "drishti_token";
@@ -70,11 +71,37 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
 };
 
 /**
- * Role gate. Always mount it after requireAuth, which populates req.user.
+ * Permission gate. Always mount it after requireAuth, which populates req.user.
  *
- * The role checked is the caller's role *in the organisation the token names*,
- * not a global one, so the same account can be ADMIN in one tenant and VIEWER
- * in another.
+ * Prefer this over `requireRole`: the permission names the operation, so the
+ * matrix in lib/permissions.ts stays the single answer to "what can an analyst
+ * do?" rather than something reconstructed by grepping route files.
+ *
+ * The role consulted is the caller's role *in the organisation the token
+ * names*, so the same account can be ADMIN in one tenant and VIEWER in
+ * another.
+ */
+export function requirePermission(permission: Permission): RequestHandler {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.user) {
+      next(new UnauthorizedError("Authentication required"));
+      return;
+    }
+    if (!can(req.user.role, permission)) {
+      next(
+        new ForbiddenError(
+          `Requires one of: ${rolesWith(permission).join(", ")} (permission: ${permission})`,
+        ),
+      );
+      return;
+    }
+    next();
+  };
+}
+
+/**
+ * Raw role gate. Retained for the two places a permission would be a worse
+ * fit than a role, and for tests that assert on role semantics directly.
  */
 export function requireRole(roles: Role[]): RequestHandler {
   return (req: Request, _res: Response, next: NextFunction) => {

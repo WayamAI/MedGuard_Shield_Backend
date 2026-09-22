@@ -1,7 +1,9 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
-import { ctxOf, requireRole } from "../middleware/auth.js";
+import { ctxOf, requirePermission } from "../middleware/auth.js";
+import { ANALYST_CONTROL_FIELDS, can } from "../lib/permissions.js";
+import { ForbiddenError, UnauthorizedError } from "../services/authService.js";
 import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
@@ -45,8 +47,46 @@ const patchBody = createBody.partial().refine(
   { message: "Provide at least one field to update" },
 );
 
-const canWrite = requireRole(["ADMIN", "ANALYST"]);
-const adminOnly = requireRole(["ADMIN"]);
+/**
+ * Controls are the one resource where the admin/analyst line runs *through* a
+ * record rather than around it.
+ *
+ * Recording how well a control is working -- its status, its assessed
+ * effectiveness, when it was last reviewed -- is assessment, and assessment is
+ * the analyst's job. Renaming it, recategorising it, reassigning its owner or
+ * changing the framework reference is configuration, and configuration is the
+ * admin's.
+ *
+ * So the gate reads the body: a PATCH touching only assessment fields needs
+ * `control:assess`, and anything else needs `control:update`. The 403 names
+ * the offending fields, because "forbidden" without saying which field is
+ * unhelpful to a UI that could simply grey them out.
+ */
+const canPatchControl: RequestHandler = (req, _res, next) => {
+  if (!req.user) {
+    next(new UnauthorizedError("Authentication required"));
+    return;
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const configurationFields = Object.keys(body).filter(
+    (k) => !ANALYST_CONTROL_FIELDS.has(k),
+  );
+
+  const needed = configurationFields.length > 0 ? "control:update" : "control:assess";
+  if (can(req.user.role, needed)) {
+    next();
+    return;
+  }
+
+  next(
+    new ForbiddenError(
+      configurationFields.length > 0
+        ? `Requires ADMIN to change: ${configurationFields.join(", ")}. ANALYST may change only: ${[...ANALYST_CONTROL_FIELDS].join(", ")}`
+        : "Requires one of: ADMIN, ANALYST (permission: control:assess)",
+    ),
+  );
+};
 
 controlsRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
@@ -68,7 +108,7 @@ controlsRouter.get("/:id", validate({ params: idParam }), async (req, res, next)
   }
 });
 
-controlsRouter.post("/", canWrite, validate({ body: createBody }), async (req, res, next) => {
+controlsRouter.post("/", requirePermission("control:create"), validate({ body: createBody }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const control = await createControl(ctx, createBody.parse(req.body));
@@ -84,7 +124,7 @@ controlsRouter.post("/", canWrite, validate({ body: createBody }), async (req, r
 });
 
 controlsRouter.patch(
-  "/:id", canWrite, validate({ params: idParam, body: patchBody }),
+  "/:id", canPatchControl, validate({ params: idParam, body: patchBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -102,7 +142,7 @@ controlsRouter.patch(
   },
 );
 
-controlsRouter.post("/:id/archive", adminOnly, validate({ params: idParam }), async (req, res, next) => {
+controlsRouter.post("/:id/archive", requirePermission("control:archive"), validate({ params: idParam }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const { id } = idParam.parse(req.params);
@@ -123,7 +163,7 @@ const linkParams = z.object({
 });
 
 controlsRouter.put(
-  "/:id/assets/:assetId", canWrite, validate({ params: linkParams }),
+  "/:id/assets/:assetId", requirePermission("control:link-asset"), validate({ params: linkParams }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -141,7 +181,7 @@ controlsRouter.put(
 );
 
 controlsRouter.delete(
-  "/:id/assets/:assetId", canWrite, validate({ params: linkParams }),
+  "/:id/assets/:assetId", requirePermission("control:link-asset"), validate({ params: linkParams }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);

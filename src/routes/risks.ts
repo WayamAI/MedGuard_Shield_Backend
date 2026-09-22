@@ -6,7 +6,7 @@ import { ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { listRisks, riskDistribution } from "../services/riskService.js";
 import { listRiskHistory, recomputeAssetRisk } from "../services/riskEngine.js";
-import { requireRole } from "../middleware/auth.js";
+import { requirePermission } from "../middleware/auth.js";
 import { recordAudit } from "../services/auditService.js";
 
 export const risksRouter = Router();
@@ -66,7 +66,7 @@ const assetIdParam = z.object({ assetId: z.coerce.number().int().positive() });
 
 risksRouter.post(
   "/:assetId/recompute",
-  requireRole(["ADMIN", "ANALYST"]),
+  requirePermission("asset:assess"),
   validate({ params: assetIdParam }),
   async (req, res, next) => {
     try {

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
-import { ctxOf, requireRole } from "../middleware/auth.js";
+import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
@@ -45,7 +45,6 @@ const patchBody = z
 
 const transitionBody = z.object({ status: z.enum(STATUSES) });
 
-const canWrite = requireRole(["ADMIN", "ANALYST"]);
 
 threatsRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
@@ -75,7 +74,7 @@ threatsRouter.get("/:id", validate({ params: idParam }), async (req, res, next) 
   }
 });
 
-threatsRouter.post("/", canWrite, validate({ body: createBody }), async (req, res, next) => {
+threatsRouter.post("/", requirePermission("threat:create"), validate({ body: createBody }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const threat = await createThreat(ctx, createBody.parse(req.body));
@@ -91,7 +90,7 @@ threatsRouter.post("/", canWrite, validate({ body: createBody }), async (req, re
 });
 
 threatsRouter.patch(
-  "/:id", canWrite, validate({ params: idParam, body: patchBody }),
+  "/:id", requirePermission("threat:update"), validate({ params: idParam, body: patchBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -115,7 +114,7 @@ threatsRouter.patch(
  * trial and error. Every transition is audited with both statuses.
  */
 threatsRouter.post(
-  "/:id/status", canWrite, validate({ params: idParam, body: transitionBody }),
+  "/:id/status", requirePermission("threat:transition"), validate({ params: idParam, body: transitionBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);

@@ -1,6 +1,6 @@
 import { Router, type RequestHandler } from "express";
 import multer from "multer";
-import { ctxOf, requireRole } from "../middleware/auth.js";
+import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { recordAudit } from "../services/auditService.js";
 import { BadRequestError, HttpError, NotFoundError } from "../lib/errors.js";
 import { templateCsv } from "../services/importParsing.js";
@@ -20,7 +20,8 @@ const MAX_MB = MAX_BYTES / (1024 * 1024);
  * estate and there is no reason for it to be broader than the operation it
  * exists to support.
  */
-const adminOnly = requireRole(["ADMIN"]);
+const canReadContract = requirePermission("import:read");
+const canImport = requirePermission("import:execute");
 
 /**
  * Files are held in memory, never written to disk. Nothing in the pipeline
@@ -83,7 +84,7 @@ function csvTextFrom(file: Express.Multer.File | undefined): string {
 }
 
 /** The column contract itself, useful for a UI building its own hints. */
-importRouter.get("/", adminOnly, (_req, res) => {
+importRouter.get("/", canReadContract, (_req, res) => {
   res.json({
     data: ENTITY_SLUGS.map((slug) => {
       const spec = specFor(slug);
@@ -106,7 +107,7 @@ importRouter.get("/", adminOnly, (_req, res) => {
   });
 });
 
-importRouter.get("/:entity/template", adminOnly, (req, res, next) => {
+importRouter.get("/:entity/template", canReadContract, (req, res, next) => {
   try {
     const spec = requireSpec(req.params.entity);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -117,7 +118,7 @@ importRouter.get("/:entity/template", adminOnly, (req, res, next) => {
   }
 });
 
-importRouter.post("/:entity/validate", adminOnly, uploadCsv, async (req, res, next) => {
+importRouter.post("/:entity/validate", canImport, uploadCsv, async (req, res, next) => {
   try {
     const spec = requireSpec(req.params.entity);
     const report = await validateImport(ctxOf(req), spec, csvTextFrom(req.file));
@@ -129,7 +130,7 @@ importRouter.post("/:entity/validate", adminOnly, uploadCsv, async (req, res, ne
   }
 });
 
-importRouter.post("/:entity", adminOnly, uploadCsv, async (req, res, next) => {
+importRouter.post("/:entity", canImport, uploadCsv, async (req, res, next) => {
   const ctx = ctxOf(req);
   let spec;
   try {

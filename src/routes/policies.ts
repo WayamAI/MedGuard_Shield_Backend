@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
-import { ctxOf, requireRole } from "../middleware/auth.js";
+import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
@@ -34,8 +34,6 @@ const patchBody = createBody.partial().refine(
   { message: "Provide at least one field to update" },
 );
 
-const canWrite = requireRole(["ADMIN", "ANALYST"]);
-const adminOnly = requireRole(["ADMIN"]);
 
 policiesRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
@@ -57,7 +55,7 @@ policiesRouter.get("/:id", validate({ params: idParam }), async (req, res, next)
   }
 });
 
-policiesRouter.post("/", canWrite, validate({ body: createBody }), async (req, res, next) => {
+policiesRouter.post("/", requirePermission("policy:create"), validate({ body: createBody }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const policy = await createPolicy(ctx, createBody.parse(req.body));
@@ -72,7 +70,7 @@ policiesRouter.post("/", canWrite, validate({ body: createBody }), async (req, r
 });
 
 policiesRouter.patch(
-  "/:id", canWrite, validate({ params: idParam, body: patchBody }),
+  "/:id", requirePermission("policy:update"), validate({ params: idParam, body: patchBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -90,7 +88,7 @@ policiesRouter.patch(
   },
 );
 
-policiesRouter.post("/:id/archive", adminOnly, validate({ params: idParam }), async (req, res, next) => {
+policiesRouter.post("/:id/archive", requirePermission("policy:archive"), validate({ params: idParam }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const { id } = idParam.parse(req.params);
@@ -111,7 +109,7 @@ const linkParams = z.object({
 });
 
 policiesRouter.put(
-  "/:id/controls/:controlId", canWrite, validate({ params: linkParams }),
+  "/:id/controls/:controlId", requirePermission("policy:link-control"), validate({ params: linkParams }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -129,7 +127,7 @@ policiesRouter.put(
 );
 
 policiesRouter.delete(
-  "/:id/controls/:controlId", canWrite, validate({ params: linkParams }),
+  "/:id/controls/:controlId", requirePermission("policy:link-control"), validate({ params: linkParams }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);

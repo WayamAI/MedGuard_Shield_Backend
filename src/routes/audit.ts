@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
-import { ctxOf, requireRole } from "../middleware/auth.js";
+import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { listAuditEvents } from "../services/auditQueryService.js";
@@ -43,7 +43,7 @@ const listQuery = paginationQuery.extend({
  */
 auditRouter.get(
   "/",
-  requireRole(["ADMIN"]),
+  requirePermission("audit:read"),
   validate({ query: listQuery }),
   async (req, res, next) => {
     try {

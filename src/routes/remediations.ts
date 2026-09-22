@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
-import { ctxOf, requireRole } from "../middleware/auth.js";
+import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
@@ -55,7 +55,6 @@ const patchBody = createBody.partial().refine(
 const transitionBody = z.object({ status: z.enum(STATUSES) });
 const assignBody = z.object({ ownerId: z.coerce.number().int().positive().nullable() });
 
-const canWrite = requireRole(["ADMIN", "ANALYST"]);
 
 remediationsRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
@@ -85,7 +84,7 @@ remediationsRouter.get("/:id", validate({ params: idParam }), async (req, res, n
   }
 });
 
-remediationsRouter.post("/", canWrite, validate({ body: createBody }), async (req, res, next) => {
+remediationsRouter.post("/", requirePermission("remediation:create"), validate({ body: createBody }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const item = await createRemediation(ctx, createBody.parse(req.body));
@@ -101,7 +100,7 @@ remediationsRouter.post("/", canWrite, validate({ body: createBody }), async (re
 });
 
 remediationsRouter.patch(
-  "/:id", canWrite, validate({ params: idParam, body: patchBody }),
+  "/:id", requirePermission("remediation:update"), validate({ params: idParam, body: patchBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -129,7 +128,7 @@ remediationsRouter.patch(
  * compliance record that nobody actually performed.
  */
 remediationsRouter.post(
-  "/:id/status", canWrite, validate({ params: idParam, body: transitionBody }),
+  "/:id/status", requirePermission("remediation:transition"), validate({ params: idParam, body: transitionBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -155,7 +154,7 @@ remediationsRouter.post(
 );
 
 remediationsRouter.post(
-  "/:id/assign", canWrite, validate({ params: idParam, body: assignBody }),
+  "/:id/assign", requirePermission("remediation:assign"), validate({ params: idParam, body: assignBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
-import { ctxOf, requireRole } from "../middleware/auth.js";
+import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
@@ -41,7 +41,6 @@ const patchBody = z
     message: "Provide at least one field to update",
   });
 
-const canWrite = requireRole(["ADMIN", "ANALYST"]);
 
 accessRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
@@ -72,7 +71,7 @@ accessRouter.get("/:id", validate({ params: idParam }), async (req, res, next) =
   }
 });
 
-accessRouter.post("/", canWrite, validate({ body: grantBody }), async (req, res, next) => {
+accessRouter.post("/", requirePermission("access:grant"), validate({ body: grantBody }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const input = grantBody.parse(req.body);
@@ -89,7 +88,7 @@ accessRouter.post("/", canWrite, validate({ body: grantBody }), async (req, res,
 });
 
 accessRouter.patch(
-  "/:id", canWrite, validate({ params: idParam, body: patchBody }),
+  "/:id", requirePermission("access:update"), validate({ params: idParam, body: patchBody }),
   async (req, res, next) => {
     try {
       const ctx = ctxOf(req);
@@ -112,7 +111,7 @@ accessRouter.patch(
  * and when is the question an access review has to answer later, and a DELETE
  * destroys it. There is deliberately no DELETE on this resource.
  */
-accessRouter.post("/:id/revoke", canWrite, validate({ params: idParam }), async (req, res, next) => {
+accessRouter.post("/:id/revoke", requirePermission("access:revoke"), validate({ params: idParam }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const { id } = idParam.parse(req.params);
@@ -129,7 +128,7 @@ accessRouter.post("/:id/revoke", canWrite, validate({ params: idParam }), async 
 });
 
 /** Attests that a human looked at this grant. Clears the NEVER_REVIEWED flag. */
-accessRouter.post("/:id/review", canWrite, validate({ params: idParam }), async (req, res, next) => {
+accessRouter.post("/:id/review", requirePermission("access:review"), validate({ params: idParam }), async (req, res, next) => {
   try {
     const ctx = ctxOf(req);
     const { id } = idParam.parse(req.params);
