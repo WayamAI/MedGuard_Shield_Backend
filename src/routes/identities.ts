@@ -8,6 +8,8 @@ import { diffFields, recordAudit } from "../services/auditService.js";
 import {
   archiveIdentity, createIdentity, getIdentityById, listIdentities, updateIdentity,
 } from "../services/identityService.js";
+import { onAssetsChanged } from "../services/riskTriggers.js";
+import { prisma } from "../lib/prisma.js";
 
 export const identitiesRouter = Router();
 
@@ -101,6 +103,14 @@ identitiesRouter.post("/:id/archive", requirePermission("identity:archive"), val
   try {
     const ctx = ctxOf(req);
     const { id } = idParam.parse(req.params);
+
+    // Captured before archiving, because archiving revokes the grants and the
+    // assets they pointed at would otherwise be unreachable from here.
+    const affected = await prisma.accessGrant.findMany({
+      where: { identityId: id, revokedAt: null, organizationId: ctx.organizationId },
+      select: { assetId: true },
+    });
+
     const result = await archiveIdentity(ctx, id);
     await recordAudit(ctx, {
       action: "IDENTITY_ARCHIVED", entityType: "Identity", entityId: id,
@@ -110,7 +120,14 @@ identitiesRouter.post("/:id/archive", requirePermission("identity:archive"), val
       },
       req,
     });
-    ok(res, result);
+
+    // Revoking a leaver's access reduces the exposure of everything they
+    // could reach.
+    const risk = await onAssetsChanged(
+      ctx, affected.map((g) => g.assetId), "ACCESS_CHANGED", req,
+    );
+
+    ok(res, { ...result, riskChanged: risk.changed });
   } catch (err) {
     next(err);
   }

@@ -7,6 +7,7 @@ import { ForbiddenError, UnauthorizedError } from "../services/authService.js";
 import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
+import { controlFieldsAffectRisk, onAssetChanged, onControlChanged } from "../services/riskTriggers.js";
 import {
   archiveControl, createControl, getControlById, listControls, setAssetControl, updateControl,
 } from "../services/controlService.js";
@@ -135,7 +136,14 @@ controlsRouter.patch(
         action: "CONTROL_UPDATED", entityType: "Control", entityId: id,
         metadata: { changes: diffFields(before, input) }, req,
       });
-      ok(res, after);
+
+      // Status and effectiveness feed the control-gap factor of every asset
+      // this control is applied to.
+      const risk = controlFieldsAffectRisk(input)
+        ? await onControlChanged(ctx, id, req)
+        : { changed: [] };
+
+      ok(res, { ...after, riskChanged: risk.changed });
     } catch (err) {
       next(err);
     }
@@ -173,7 +181,8 @@ controlsRouter.put(
         action: "CONTROL_LINKED_ASSET", entityType: "Control", entityId: id,
         metadata: { assetId }, req,
       });
-      ok(res, result);
+      const risk = await onAssetChanged(ctx, assetId, "CONTROL_CHANGED", req);
+      ok(res, { ...result, riskChanged: risk.changed[0] ?? null });
     } catch (err) {
       next(err);
     }
@@ -191,7 +200,8 @@ controlsRouter.delete(
         action: "CONTROL_UNLINKED_ASSET", entityType: "Control", entityId: id,
         metadata: { assetId }, req,
       });
-      ok(res, result);
+      const risk = await onAssetChanged(ctx, assetId, "CONTROL_CHANGED", req);
+      ok(res, { ...result, riskChanged: risk.changed[0] ?? null });
     } catch (err) {
       next(err);
     }

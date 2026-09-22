@@ -9,6 +9,7 @@ import {
   createThreat, getThreatById, listThreats, threatSummary, transitionThreat, updateThreat,
 } from "../services/threatService.js";
 import { entityHistory } from "../services/auditQueryService.js";
+import { onAssetChanged } from "../services/riskTriggers.js";
 
 export const threatsRouter = Router();
 
@@ -83,7 +84,11 @@ threatsRouter.post("/", requirePermission("threat:create"), validate({ body: cre
       metadata: { title: threat.title, severity: threat.severity, assetId: threat.assetId },
       req,
     });
-    created(res, threat);
+
+    // An open HIGH/CRITICAL detection is evidence the exposure is not
+    // hypothetical, and feeds the asset's exposure factor.
+    const risk = await onAssetChanged(ctx, threat.assetId, "THREAT_CHANGED", req);
+    created(res, { ...threat, riskChanged: risk.changed[0] ?? null });
   } catch (err) {
     next(err);
   }
@@ -127,7 +132,10 @@ threatsRouter.post(
         metadata: { from: before.status, to: after.status, title: after.title }, req,
       });
 
-      ok(res, after);
+      // Closing the last open severe threat lowers exposure; reopening raises it.
+      const risk = await onAssetChanged(ctx, after.assetId, "THREAT_CHANGED", req);
+
+      ok(res, { ...after, riskChanged: risk.changed[0] ?? null });
     } catch (err) {
       next(err);
     }

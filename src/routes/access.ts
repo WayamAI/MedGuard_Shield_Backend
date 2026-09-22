@@ -9,6 +9,7 @@ import {
   accessSummary, getAccessGrantById, grantAccess, listAccessGrants,
   reviewAccessGrant, revokeAccessGrant, updateAccessGrant,
 } from "../services/accessService.js";
+import { onAssetChanged } from "../services/riskTriggers.js";
 
 export const accessRouter = Router();
 
@@ -81,7 +82,10 @@ accessRouter.post("/", requirePermission("access:grant"), validate({ body: grant
       metadata: { identityId: grant.identityId, assetId: grant.assetId, level: grant.level },
       req,
     });
-    created(res, grant);
+
+    // Who can reach an asset, and at what level, feeds its exposure factor.
+    const risk = await onAssetChanged(ctx, grant.assetId, "ACCESS_CHANGED", req);
+    created(res, { ...grant, riskChanged: risk.changed[0] ?? null });
   } catch (err) {
     next(err);
   }
@@ -99,7 +103,8 @@ accessRouter.patch(
         action: "ACCESS_UPDATED", entityType: "AccessGrant", entityId: id,
         metadata: { changes: diffFields(before, input) }, req,
       });
-      ok(res, after);
+      const risk = await onAssetChanged(ctx, after.assetId, "ACCESS_CHANGED", req);
+      ok(res, { ...after, riskChanged: risk.changed[0] ?? null });
     } catch (err) {
       next(err);
     }
@@ -121,7 +126,8 @@ accessRouter.post("/:id/revoke", requirePermission("access:revoke"), validate({ 
       metadata: { identityId: grant.identityId, assetId: grant.assetId, level: grant.level },
       req,
     });
-    ok(res, grant);
+    const risk = await onAssetChanged(ctx, grant.assetId, "ACCESS_CHANGED", req);
+    ok(res, { ...grant, riskChanged: risk.changed[0] ?? null });
   } catch (err) {
     next(err);
   }
