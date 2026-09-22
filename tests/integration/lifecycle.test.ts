@@ -210,14 +210,14 @@ describe("controls", () => {
   it("creates a control and applies it to an asset", async () => {
     const control = await request(app)
       .post("/api/controls")
-      .set(auth(analyst))
+      .set(auth(admin))
       .send({ name: "MFA", description: "Require MFA", category: "ACCESS", status: "IMPLEMENTED", effectiveness: "EFFECTIVE" });
 
     expect(control.status).toBe(201);
 
     const link = await request(app)
       .put(`/api/controls/${control.body.data.id}/assets/${ids.ehrId}`)
-      .set(auth(analyst));
+      .set(auth(admin));
     expect(link.status).toBe(200);
 
     const detail = await request(app).get(`/api/assets/${ids.ehrId}`).set(auth(viewer));
@@ -230,9 +230,9 @@ describe("controls", () => {
    * the endpoint offers a number and applying it is a separate, explicit act.
    */
   it("suggests a control gap without applying it", async () => {
-    const control = await request(app).post("/api/controls").set(auth(analyst))
+    const control = await request(app).post("/api/controls").set(auth(admin))
       .send({ name: "Encryption", description: "At rest", category: "ENCRYPTION", status: "IMPLEMENTED", effectiveness: "EFFECTIVE" });
-    await request(app).put(`/api/controls/${control.body.data.id}/assets/${ids.ehrId}`).set(auth(analyst));
+    await request(app).put(`/api/controls/${control.body.data.id}/assets/${ids.ehrId}`).set(auth(admin));
 
     const before = await prisma.risk.findUniqueOrThrow({ where: { assetId: ids.ehrId } });
 

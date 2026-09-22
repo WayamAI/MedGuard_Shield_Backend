@@ -115,10 +115,11 @@ describe("vendor writes follow the same RBAC rules as assets", () => {
     expect(res.body.data.name).toBe("New Vendor");
   });
 
-  it("allows ANALYST to create", async () => {
+  it("refuses ANALYST to create — vendor records are configuration", async () => {
     const res = await request(app).post("/api/vendors")
       .set("Authorization", `Bearer ${tokens.ANALYST}`).send(body);
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toContain("vendor:create");
   });
 
   it("refuses VIEWER with 403 and writes nothing", async () => {

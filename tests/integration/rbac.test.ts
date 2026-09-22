@@ -36,12 +36,15 @@ describe("POST /api/assets — role gate", () => {
     expect(res.body.data.id).toBeTypeOf("number");
   });
 
-  it("allows ANALYST", async () => {
+  it("refuses ANALYST — creating an asset is configuration, not analysis", async () => {
     const res = await request(app)
       .post("/api/assets")
       .set("Authorization", `Bearer ${tokens.ANALYST}`)
       .send(newAsset("Created By Analyst"));
-    expect(res.status).toBe(201);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toContain("asset:create");
+    expect(await prisma.asset.findFirst({ where: { name: "Created By Analyst" } })).toBeNull();
   });
 
   it("refuses VIEWER with 403 and names the required roles", async () => {
@@ -84,12 +87,15 @@ describe("PATCH /api/assets/:id — role gate", () => {
     expect(res.body.data.phiVolume).toBe(500);
   });
 
-  it("allows ANALYST", async () => {
+  it("refuses ANALYST — editing the inventory is configuration", async () => {
     const res = await request(app)
       .patch(`/api/assets/${ids.ehrId}`)
       .set("Authorization", `Bearer ${tokens.ANALYST}`)
       .send({ mfaEnabled: false });
-    expect(res.status).toBe(200);
+
+    expect(res.status).toBe(403);
+    const asset = await prisma.asset.findUniqueOrThrow({ where: { id: ids.ehrId } });
+    expect(asset.mfaEnabled).toBe(true);
   });
 
   it("refuses VIEWER with 403 and leaves the row unchanged", async () => {

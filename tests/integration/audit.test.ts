@@ -89,9 +89,10 @@ describe("data mutations are recorded", () => {
   });
 
   it("records before and after values on an update", async () => {
+    // ADMIN: editing the inventory is configuration, not analysis.
     await request(app)
       .patch(`/api/assets/${ids.ehrId}`)
-      .set("Authorization", `Bearer ${analyst}`)
+      .set("Authorization", `Bearer ${admin}`)
       .send({ phiVolume: 7777 });
 
     const [event] = await eventsFor("ASSET_UPDATED");
@@ -125,9 +126,10 @@ describe("data mutations are recorded", () => {
       data: { organizationId: ids.organizationId, identityId: identity.id, assetId: ids.ehrId },
     });
 
+    // ADMIN: revoking access changes who can reach PHI.
     await request(app)
       .post(`/api/access/${grant.id}/revoke`)
-      .set("Authorization", `Bearer ${analyst}`);
+      .set("Authorization", `Bearer ${admin}`);
 
     const [event] = await eventsFor("ACCESS_REVOKED");
     expect(event!.entityId).toBe(grant.id);
