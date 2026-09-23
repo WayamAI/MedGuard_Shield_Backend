@@ -8,7 +8,7 @@ captured from a running server, not written from the schema.
 |---|---|
 | Version | 0.3.0 |
 | Base URL (dev) | `http://localhost:4000` |
-| Endpoints | 88 (1 public, 87 authenticated) |
+| Endpoints | 87 (1 public, 86 authenticated) |
 | Content type | JSON, except CSV upload (`multipart/form-data`) and template download (`text/csv`) |
 
 **If you are building the client, read

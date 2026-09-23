@@ -16,7 +16,7 @@ PHI risk-intelligence API. Node + TypeScript + Express + Prisma + Postgres.
 
 | Document | What it covers |
 |---|---|
-| [`FRONTEND_API_CONTRACT.md`](./FRONTEND_API_CONTRACT.md) | **Start here if you are building the client.** All 86 endpoints, breaking changes, demo walkthrough. |
+| [`FRONTEND_API_CONTRACT.md`](./FRONTEND_API_CONTRACT.md) | **Start here if you are building the client.** All 87 endpoints, breaking changes, demo walkthrough. |
 | [`API_REFERENCE.md`](./API_REFERENCE.md) | Per-endpoint reference with curl examples. |
 | [`IMPORT_GUIDE.md`](./IMPORT_GUIDE.md) | CSV import contracts. |
 | [`DEPLOYMENT.md`](./DEPLOYMENT.md) | Local, Docker, staging and production. |

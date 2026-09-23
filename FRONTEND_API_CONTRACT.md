@@ -7,7 +7,7 @@ can call it.
 | | |
 |---|---|
 | Base URL (dev) | `http://localhost:4000` |
-| Endpoints | **88** (was 22) |
+| Endpoints | **87** (was 22) |
 | Tests | 529 passing |
 | Branch | `feat/drishti-platform-foundation` (not merged — see the report) |
 
