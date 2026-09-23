@@ -20,7 +20,8 @@
     "lint:fix": "eslint . --fix",
     "db:seed": "tsx prisma/seed.ts",
     "db:deploy": "prisma migrate deploy",
-    "docker:build": "docker build -t drishti-api ."
+    "docker:build": "docker build -t drishti-api .",
+    "db:seed:demo": "tsx prisma/seed-demo.ts"
   },
   "engines": {
     "node": ">=20"
