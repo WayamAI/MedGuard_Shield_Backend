@@ -4,8 +4,8 @@
 |---|---|
 | Date | 2026-09-23 |
 | Version | 0.3.0 |
-| Branch | `feat/drishti-platform-foundation` — **13 commits, pushed** |
-| Remote | `origin/feat/drishti-platform-foundation` @ `38c9b97` |
+| Branch | `feat/drishti-platform-foundation` — **16 commits, pushed** |
+| Remote | `origin/feat/drishti-platform-foundation` @ `d71567c` |
 | Endpoints | **87** (1 public, 86 authenticated) |
 | Models | **22** |
 | Tests | **529 passing**, 0 skipped |
@@ -415,11 +415,13 @@ down afterwards.
 
 ## 19. GitHub commits
 
-**13 commits, pushed and verified** on
-`origin/feat/drishti-platform-foundation` (`38c9b97`). No force push, no
+**16 commits, pushed and verified** on
+`origin/feat/drishti-platform-foundation` (`d71567c`). The 14 most recent are
+listed below; `15db7bd` and `c06b6f0` are the two platform commits beneath them. No force push, no
 squash, no history rewrite, no self-merge.
 
 ```
+d71567c docs: add the final report
 38c9b97 docs: correct the endpoint count to 87
 cb83a07 docs(api): document the permission matrix, derived factors and vendor history
 b8d0a2f test(risk): cover derivation, automatic triggers and vendor history
@@ -435,7 +437,6 @@ d33a5bd docs: add the implementation report
 7a2b5f1 test: cover tenancy, sessions, audit, lifecycles, pagination and search
 ```
 
-(plus the two earlier platform commits, `15db7bd` and `c06b6f0`.)
 
 ## 20. Remaining blockers
 
