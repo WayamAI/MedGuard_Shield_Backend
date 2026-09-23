@@ -8,7 +8,7 @@
 | Remote | `origin/feat/drishti-platform-foundation` @ `d71567c` |
 | Endpoints | **87** (1 public, 86 authenticated) |
 | Models | **22** |
-| Tests | **529 passing**, 0 skipped |
+| Tests | **547 passing**, 0 skipped |
 | Build / typecheck / lint | all pass |
 
 The three gaps the previous report left open are closed: **vendor risk
@@ -31,7 +31,7 @@ your call.
 14. [Authentication](#14-authentication) · 15. [CSV](#15-csv)
 16. [Docker](#16-docker) · 17. [Tests](#17-tests)
 18. [Live API verification](#18-live-api-verification) · 19. [GitHub commits](#19-github-commits)
-20. [Remaining blockers](#20-remaining-blockers) · [Final status](#final-status)
+20. [Remaining blockers](#20-remaining-blockers) · 21. [Demo environment](#21-demo-environment) · [Final status](#final-status)
 
 ---
 
@@ -459,7 +459,6 @@ persisted data. Nothing is stubbed; nothing returns a fabricated value.
 
 | Gap | Severity | Note |
 |---|---|---|
-| **Demo database not seeded** with controls/policies/remediation | operational | `npm run db:seed` — **truncates**. Still your call; I have not run it. |
 | **No PHI-assignment endpoint** | P1 | `AssetPHI` links come only from seed or CSV import. "Assign PHI to asset" has no REST path — the E2E used import. |
 | **No organisation-creation endpoint** | P1 | Orgs come from migration or SQL. The E2E created org B with psql. Fine for one tenant; needed before self-service. |
 | **No user-management endpoints** | P1 | `GET /api/organization/members` is read-only. No invite, no role change. The mandate's "users: read/update role where authorized" is half-done. |
@@ -475,6 +474,212 @@ persisted data. Nothing is stubbed; nothing returns a fabricated value.
 
 No AI endpoints. No compliance score. No DELETE on customer records. No
 fabricated data paths anywhere.
+
+---
+
+## 21. Demo environment
+
+The last blocker in this report's previous revision was that the demo database
+held 0 controls, 0 policies and 0 remediations, and the only seed available
+truncated every table to fix that. That is now solved without destroying
+anything.
+
+### The command
+
+```bash
+npm run db:seed:demo
+```
+
+| | `npm run db:seed` | `npm run db:seed:demo` |
+|---|---|---|
+| Behaviour | TRUNCATEs every table, rebuilds | Upsert-only |
+| Safe against existing data | ❌ | ✅ |
+| Safe to run twice | ❌ (rebuilds) | ✅ (no-op) |
+| Scope | whole database | one organisation |
+
+### Safety
+
+`prisma/seed-demo.ts` contains **no** `deleteMany`, `.delete(`, `TRUNCATE`,
+`DROP`, `$executeRaw`, `$queryRaw`, `updateMany` or migration reset. That is
+not a claim to take on trust: a test reads the file's own source, strips
+comments, and fails if any of those strings appear in executable code.
+
+The single `.update()` call backdates an audit row the same function created
+microseconds earlier, so historical entries read as history rather than as a
+burst of activity at seed time. It cannot reach a row it did not just write.
+
+Blast radius is one organisation, resolved by slug (`DEMO_ORG_SLUG`, default
+`drishti-demo`). Records in other organisations are never written and never
+read for writing.
+
+### Idempotency
+
+Verified three ways, because the seed's own counters could themselves regress:
+
+1. The run summary reports nothing created on a second run.
+2. A 21-table census is byte-identical before and after a second run.
+3. `RiskHistory` and `AuditEvent` — the two tables with no unique constraint,
+   and therefore the two that would silently accumulate — are counted
+   individually.
+
+Those tables need care precisely because the schema is right not to constrain
+them: history is append-only. Idempotency there is a deliberate "do not assess
+what is already assessed" and an existence check on
+`(action, entityType, entityId)`, not a database guarantee.
+
+Observed on the real demo database:
+
+| Run | Result |
+|---|---|
+| 1 | created the full estate |
+| 2 | **created 0 of everything**, totals unchanged |
+| 3 (after adding one asset to the seed) | created only the 1 new asset and its 4 grants, 3 PHI links, 2 flows, 2 vendor links, 1 threat, 1 remediation |
+
+That third run is the useful one: the seed tops up an organisation it has
+already populated, rather than only working on an empty one.
+
+### Demo organisation
+
+**Drishti Demo Healthcare** (`drishti-demo`), created alongside the existing
+Meridian Health System rather than replacing it.
+
+| Entity | Count |
+|---|---|
+| Assets | 9 |
+| PHI types / asset-PHI links | 4 / 15 |
+| Data flows | 10 |
+| Identities | 6 |
+| Access grants | 13 |
+| Vendors | 5 |
+| Threats | 6 |
+| Controls | 8 |
+| Policies | 5 |
+| Remediations | 7 |
+| Risk history | 32 |
+| Audit events | 17 |
+
+All synthetic. No real patients, clinicians, vendors or credentials anywhere in
+the file.
+
+Accounts: `admin@drishti-demo.invalid`, `analyst@drishti-demo.invalid`,
+`viewer@drishti-demo.invalid`, all using `DEMO_USER_PASSWORD`. The seed never
+prints it, and an account that already exists keeps the password it has rather
+than being silently reset.
+
+### The story the data tells
+
+Risk is **not hardcoded**. The graph is built first, then the real engine
+scores it, so every number comes from the demo's own assets, access, vendors,
+controls and threats by the same code paths a customer's data would take.
+
+The ordering is deliberate so the trend charts have something to draw:
+vendors are assessed *before* they are given reach, and assets *before*
+controls are applied. Applying the controls then moves the scores down and the
+movement is recorded with `reason: CONTROL_CHANGED` — "here is what it looked
+like before we had controls, and after".
+
+| Band | Count | Example |
+|---|---|---|
+| EXTREME | 1 | Legacy Records Exchange — 100 |
+| CRITICAL | 0 | *(see note)* |
+| HIGH | 1 | Billing Database — 48 |
+| MODERATE | 4 | Cardiology EHR — 25.6 |
+| LOW | 3 | Patient Portal — 1.92 |
+
+The top entry earns its score rather than being handed one: 521,000 PHI
+records, unencrypted, no MFA, reachable by four identities including a
+deactivated contractor and by two vendors, unencrypted outbound flows, an
+active exfiltration alert, and no control ever applied. Exposure 5, control
+gap 5, assessor judgement 5/5 → 100.
+
+**The CRITICAL band is empty, and that is a property of the formula rather
+than a gap in the data.** The score is a product of four factors normalised
+over 625, so the 60–80 window is narrow — the codebase has documented this
+since before this work ("4/4/4/3 scores 30.72; EXTREME effectively requires all
+5s"). Filling that bucket would have meant inventing an asset to sit in it,
+which is the kind of thing this seed exists not to do. It is worth knowing
+before a demonstration, and it is a reasonable thing to be asked about.
+
+The best-protected system is also a deliberate part of the story: the
+Cardiology EHR holds the most PHI of any healthy asset (486,000 records) and
+still scores MODERATE, because it is encrypted, MFA-protected and covered by
+effective controls.
+
+### Verification
+
+**Through the API**, as the demo admin, against the running server:
+
+| Endpoint | Total |
+|---|---|
+| `/api/controls` | 8 |
+| `/api/policies` | 5 |
+| `/api/remediations` | 7 |
+| `/api/risks` | 9 |
+| `/api/vendors` | 5 |
+| `/api/threats` | 6 |
+| `/api/access` | 13 |
+| `/api/audit` | 17 |
+
+Dashboard summaries, counted over the whole organisation:
+
+```
+risk bands   {"LOW":3,"MODERATE":4,"HIGH":1,"CRITICAL":0,"EXTREME":1}
+threats      {"total":6,"open":4,"openCritical":3}
+access       {"total":13,"flagged":11,"stale":4,"neverUsed":1,
+              "withoutMfa":5,"inactiveIdentities":2,"excessiveLevel":11}
+remediation  {"total":7,"open":5,
+              "byStatus":{"OPEN":4,"IN_PROGRESS":1,"RESOLVED":1,"ACCEPTED":1}}
+report       {"assets":9,"coverage":100,"phi":1783100,
+              "controls":8,"effectiveRate":25}
+```
+
+**Risk recomputation**, live on the seeded data:
+
+| Step | Observed |
+|---|---|
+| `PATCH /api/assets/:id { mfaEnabled: false }` | exposure 4 → 5, score 25.6 → 32 |
+| `riskChanged` in the response | present, with the new snapshot |
+| Risk history | `ASSET_CHANGED`, 25.6 → 32, delta 6.4, by `admin@drishti-demo.invalid` |
+| Audit | `RISK_RECOMPUTED` with the derivation string |
+| Restore `mfaEnabled: true` | score back to 25.6 |
+
+| Step | Observed |
+|---|---|
+| `PATCH /api/vendors/:id { baaStatus: "EXPIRED" }` | control gap 1 → 4, score 2.56 → 10.24 |
+| Vendor risk history | 3 entries: `INITIAL_ASSESSMENT` → two `VENDOR_ACCESS_CHANGED` |
+| Audit | `RISK_RECOMPUTED` |
+| Restore `SIGNED` | score back to 2.56, history now 4 entries |
+
+**Existing data untouched.** Meridian Health System still holds 16 assets, 5
+vendors, 6 identities and 0 controls. Verified beyond row counts: an md5 over
+`(id, name, type, phiVolume, encrypted, mfaEnabled)` for every org-1 asset, and
+another over every org-1 risk score and band, are identical before and after
+two seed runs.
+
+> One correction worth recording: my first version of that risk checksum query
+> failed on a type cast and returned empty for both sides, which compared equal
+> and reported a false pass. It was re-run with explicit casts before being
+> believed.
+
+### CI
+
+`npm run db:seed:demo` is exercised by the test suite (18 tests), so CI covers
+it on every push.
+
+Run `35829207285` on `main`: **success, 4m1s**, against `postgres:14` — a
+different major version from the Postgres 16 used locally, so the seed's
+portability is genuinely checked rather than assumed. The previous run,
+`35823020356`, also passed. No CI failure to investigate.
+
+### Commits
+
+```
+9837307 docs(seed): document the demo environment and the two seeds
+0230427 test(seed): verify demo seed safety and idempotency
+405937a feat(seed): add a safe, non-destructive demo seed
+```
+
+Pushed to `origin/main`.
 
 ---
 
@@ -505,11 +710,13 @@ REAL AUDIT      ✅  43 actions, sanitised, transactional
 REAL PAGINATION ✅  15 collections, one documented exception
 REAL CSV        ✅  validate → confirm → transaction → audit
 REAL DOCKER     ✅  builds, runs, serves, reports healthy
+REAL DEMO DATA  ✅  seeded non-destructively, idempotent, verified via API
 ```
 
-**One operational decision is yours:** whether to run `npm run db:seed` against
-the demo database. Controls, policies and remediation return empty lists until
-you do, and the command truncates — so I have not run it.
+**The demo database is populated.** `npm run db:seed:demo` created a
+"Drishti Demo Healthcare" organisation beside the existing Meridian data
+without touching it, and re-running it is a verified no-op. Controls, policies,
+remediation and risk history all return real data through the API.
 
 ---
 
