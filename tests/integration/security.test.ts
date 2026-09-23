@@ -61,6 +61,15 @@ describe("login rate limiting", () => {
     expect(blocked.body.error.code).toBe("RATE_LIMITED");
     // draft-7 emits a single combined header, not RateLimit-Limit.
     expect(blocked.headers["ratelimit"]).toMatch(/limit=5/);
+
+    /*
+     * Retry-After is part of the contract, not an incidental header. The
+     * frontend keeps a signed-in user signed in through a 429 and schedules
+     * its next refresh from this value; without it the client can only guess
+     * how long to wait.
+     */
+    expect(blocked.headers["retry-after"]).toBeDefined();
+    expect(Number(blocked.headers["retry-after"])).toBeGreaterThan(0);
   });
 
   it("keeps blocking even when the correct password is then offered", async () => {
