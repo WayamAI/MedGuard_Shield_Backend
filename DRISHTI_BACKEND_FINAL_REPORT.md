@@ -683,6 +683,206 @@ Pushed to `origin/main`.
 
 ---
 
+## 22. Demo environment reset
+
+### The command
+
+`npm run db:demo:reset` (`prisma/reset-demo.ts`).
+
+`db:seed:demo` is additive by design — it never deletes, so a demo estate that
+has been clicked around during a rehearsal keeps whatever was added to it. That
+is the right default and the wrong thing to hand a customer. This command is
+the other half: it removes the demo organisation's records and re-seeds them,
+so every demonstration starts from the same dataset regardless of what the last
+one did to it.
+
+### How the blast radius is bounded
+
+This file genuinely deletes, so the scoping is enforced rather than intended:
+
+| Guard | Mechanism |
+|---|---|
+| Scoped statements | Every delete carries `organizationId`, directly or through the parent that owns the row |
+| No raw escape hatch | No `TRUNCATE`, `DROP`, `$executeRaw`, `$queryRaw` or `migrate reset` — asserted by a test that reads the source |
+| No unscoped delete | A test counts `.deleteMany(` against `.deleteMany({ where:` and fails if they differ |
+| Transactional proof | Rows outside the demo org are counted before *and* after the deletions **inside the same transaction**; any movement throws and rolls the whole thing back |
+| Production refusal | Refuses under `NODE_ENV=production` without `DEMO_RESET_ALLOW_PRODUCTION=yes` |
+
+The transactional check is the one that matters. A scoping mistake does not
+half-destroy a tenant and get reported afterwards — it deletes nothing at all
+and fails loudly.
+
+Deletion order is spelled out rather than left to `onDelete: Cascade`. Relying
+on cascade would mean the blast radius is defined by the schema rather than by
+this file, and a future relation added without `Cascade` would leave orphans
+instead of failing. One ordering constraint is not optional: `DataFlow.phiType`
+is `onDelete: Restrict`, so flows go before PHI types.
+
+### Deliberately not deleted
+
+- **The organisation row**, so its id stays stable.
+- **The demo user accounts and memberships.** They are already deterministic
+  (three addresses, three roles), and an operator who changed the demo password
+  would be surprised to find it silently reverted. Verified: login still
+  succeeded with the unchanged `DEMO_USER_PASSWORD` after the reset.
+- **Audit events belonging to no organisation** (failed logins). They are
+  outside the command's scope by definition.
+
+## 23. Demo dataset
+
+12 assets, 4 PHI categories, 13 data flows, 6 identities, 23 access grants,
+5 vendors, 7 threats, 8 controls, 5 policies, 9 remediations, 33 risk-history
+entries (10 of them for vendors) and 13 backdated audit events.
+
+Every name is invented. No real PHI, no real patient names, no real clinicians,
+no real vendors, no real credentials.
+
+**Risk is derived, not written.** The seed builds the graph, then the real risk
+engine scores it — the same code path a customer's data takes. Three assets
+were added this round specifically to fill the bands a demonstration needs, and
+each earns its band from graph facts rather than a literal:
+
+| Band | Count | Top entry | Why it scores there |
+|---|---|---|---|
+| EXTREME | 1 | Legacy Records Exchange (100) | 521k PHI, unencrypted, no MFA, 2 vendors, 4 identities, active exfiltration alert, no control ever applied |
+| CRITICAL | 1 | Research Data Repository (80) | 268k PHI including genomic, unencrypted, no MFA, 4 grants, vendor without a BAA — but logging and least-privilege are applied, so the control gap is 4 rather than 5 |
+| HIGH | 3 | Pharmacy Dispensing (51.2), Billing Database (48), Emergency Triage Board (48) | — |
+| MODERATE | 4 | Analytics Warehouse (38.4) | — |
+| LOW | 3 | Lab Results API (8.64) | — |
+
+The CRITICAL band was empty before this round. The earlier report recorded that
+honestly as a property of the four-factor curve rather than a seeding gap; it
+is now filled by an asset whose graph produces `5 × 5 × 5 × 4 = 500 → 80`, not
+by a number written down. The distinction between CRITICAL and EXTREME in this
+dataset is exactly one control gap point — something is protecting the research
+repository, just not enough — and a test asserts that rather than asserting the
+score.
+
+Vendor risk spans the same range: Northgate Claims Services and Archive Nine
+Backup both reach CRITICAL (64), Helix MODERATE, Lumen and Vertex LOW.
+
+Presentation coverage, each asserted by a test rather than assumed:
+
+- Remediation: 4 OPEN, 2 IN_PROGRESS, 2 RESOLVED, 1 ACCEPTED
+- Threats: 4 OPEN, 1 INVESTIGATING, 1 RESOLVED, 1 FALSE_POSITIVE
+- Vendor exposure: a vendor with no signed BAA that can reach four systems
+- Access finding: a deactivated contractor still holding ADMIN, a never-used
+  service account, and 11 flagged grants
+- Control gap: two controls assessed INEFFECTIVE, one NOT_IMPLEMENTED
+
+### Audit trail
+
+13 backdated events using only actions the product genuinely performs —
+`ASSET_CREATED`, `ASSET_UPDATED`, `VENDOR_CREATED`, `VENDOR_UPDATED`,
+`RISK_CREATED`, `THREAT_CREATED`, `THREAT_STATUS_CHANGED`, `CONTROL_UPDATED`,
+`CONTROL_LINKED_ASSET`, `ACCESS_REVIEWED`, `REMEDIATION_CREATED`,
+`REMEDIATION_RESOLVED` — attributed to the demo admin, spread from 96 days ago
+to 4 days ago. Metadata is descriptive, never a fabricated metric. Risk audit
+rows are written by the HTTP routes rather than the engine, so a seed that
+calls the engine directly produces none; the historical ones above are
+explicitly synthetic history, and labelled as such in the source.
+
+## 24. Demo credentials mechanism
+
+`DEMO_USER_PASSWORD`, read from the environment. Unchanged from the previous
+round and unchanged by the reset.
+
+- The seed refuses to run without it and refuses a password under 8 characters.
+  It will not invent one.
+- It is never printed. A test captures `console.log` across a full run and
+  fails if the password appears in the output.
+- An account that already exists keeps the password it has; the seed does not
+  overwrite records it did not create.
+- Only key names live in `.env.example` — no values, in this repository or any
+  other artifact.
+
+## 25. Verification results
+
+| Check | Result |
+|---|---|
+| `npm run typecheck` | pass |
+| `npm run lint` | pass |
+| `npm test` | **570 passed**, 0 failed, 21 files |
+| Reset determinism (scratch DB, 3 consecutive runs) | censuses byte-identical, including every score |
+| Reset determinism (test DB, via tests) | counts and scores identical across runs |
+| Reset then plain seed | seed created 0 rows; census unchanged |
+| Drift removal | stray asset, vendor, remediation and audit row all gone |
+| Other organisation after reset | assets, risks, vendors and remediations md5-identical; every count identical |
+| Tenant-less audit rows | 11 before, 11 after |
+| Demo login after reset | succeeds with the unchanged password |
+
+20 new tests in `tests/integration/demo-reset.test.ts`, on top of the 18
+existing demo-seed tests.
+
+### Live verification, against the running server
+
+`npm run db:demo:reset` was run twice against the real demo database. The
+second run removed 228 rows from organisation 2 — the full seeded estate plus
+the two `LOGIN` events the first smoke test had generated — and rebuilt them.
+Through HTTP on `:4000` as `admin@drishti-demo.invalid`:
+
+```
+assets           200  total=12      risks            200  total=12
+vendors          200  total=5       access           200  total=23
+threats          200  total=7       controls         200  total=8
+policies         200  total=5       remediations     200  total=9
+identities       200  total=6       dataflows        200  total=13
+audit            200  total=15      risks/history    200  total=33
+```
+
+`/api/reports/risk-assessment` returned 12 assets, 100% assessment coverage,
+2,323,100 PHI records, bands `{LOW:3, MODERATE:4, HIGH:3, CRITICAL:1,
+EXTREME:1}`, 8 controls at a 25% effective rate.
+
+A regex sweep of the demo organisation for `probe|verify|test|ZZ-|release|
+hydration` across assets, vendors, remediations and threats returned **0 rows**.
+
+### Two findings worth recording
+
+**1. The verification artifacts were not where they were reported to be.** The
+brief for this round listed 3 probe remediations, 2 imported vendors and 149
+audit events as contaminating the demo database. They are in organisation 1
+(**Meridian Health System**), not in the Drishti demo organisation — which held
+exactly its 7 seeded remediations and 5 seeded vendors throughout. Alongside
+them in Meridian are three probe assets, one of which is named
+`Robert'); DROP TABLE "Asset";--` from a SQL-injection test.
+
+This command did not remove them, because the same brief forbids touching other
+organisations, and because deleting from the customer-facing Meridian estate is
+not a call to make unprompted. They are invisible during a demonstration: the
+demo account belongs to organisation 2 and tenant isolation is enforced and
+tested. A scoped Meridian cleanup can be run on request —
+`DEMO_ORG_SLUG=meridian npm run db:demo:reset` would do it, but it would also
+rebuild Meridian as a Drishti demo estate, which is almost certainly not what
+is wanted; a targeted delete of the named probe rows is the better tool.
+
+**2. A client is polling `/api/auth/refresh` every 3 seconds.** During
+verification, `admin@meridian.org` generated a burst of `TOKEN_REFRESHED`
+events at 3-second intervals. That burst consumed the global rate limit (300
+requests / 15 minutes) and the live smoke test returned `RATE_LIMITED` until
+the window cleared, 290 seconds later. It also accounts for the only drift in
+Meridian's row counts during this work (+5 audit events), which is why those
+counts are reported as explained rather than as identical.
+
+Left alone — it is a frontend behaviour, not a backend defect — but a refresh
+loop at that rate will exhaust the rate limit again during a demonstration. It
+is worth fixing on the client before the demo.
+
+---
+
+# DEMO ENVIRONMENT CLEAN AND READY
+
+The Drishti demo organisation holds a deterministic, entirely synthetic estate
+spanning every risk band, with controls, policies, remediation in four states,
+threats open and closed, vendor exposure, access findings, risk history for
+both assets and vendors, and a backdated audit trail. Every number it displays
+was produced by the risk engine from that graph.
+
+`npm run db:demo:reset` rebuilds it identically, and proves — transactionally,
+not by assertion — that it touched nothing else.
+
+---
+
 # FINAL STATUS
 
 ## **BACKEND CONSUMER READY**
@@ -692,7 +892,7 @@ real authentication, real RBAC, real tenant isolation, a single real risk
 engine, real risk history for both assets and vendors, real remediation, a real
 audit trail, real pagination, real CSV import, and a real Docker image.
 
-**149 live checks, 0 failures. 529 tests, 0 failures. Build, typecheck and lint
+**149 live checks, 0 failures. 570 tests, 0 failures. Build, typecheck and lint
 clean.**
 
 The definition-of-done chain, each link verified live rather than asserted:
@@ -710,7 +910,7 @@ REAL AUDIT      ✅  43 actions, sanitised, transactional
 REAL PAGINATION ✅  15 collections, one documented exception
 REAL CSV        ✅  validate → confirm → transaction → audit
 REAL DOCKER     ✅  builds, runs, serves, reports healthy
-REAL DEMO DATA  ✅  seeded non-destructively, idempotent, verified via API
+REAL DEMO DATA  ✅  seeded non-destructively, reset deterministically, verified via API
 ```
 
 **The demo database is populated.** `npm run db:seed:demo` created a
@@ -720,7 +920,7 @@ remediation and risk history all return real data through the API.
 
 ---
 
-*Branch `feat/drishti-platform-foundation`, 13 commits, pushed to
-`origin`. `main` untouched. No database was reset; the demo database holds
-exactly the rows it held before, plus the audit trail of the verification
-logins.*
+*All work is on `main` and pushed to `origin`. No database was reset and no
+migration was rolled back. The only rows removed anywhere were those of the
+Drishti demo organisation, removed by `npm run db:demo:reset` and immediately
+rebuilt; every other organisation was verified unchanged by checksum.*

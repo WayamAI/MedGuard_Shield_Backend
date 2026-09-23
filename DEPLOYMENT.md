@@ -16,12 +16,13 @@ nothing else; there is no build-time or runtime dependency on the client.
 | demo | `DATABASE_URL` → a demo database | yes, deliberately | `prisma migrate deploy` |
 | production | `DATABASE_URL` → production | **never** | `prisma migrate deploy`, release step |
 
-### Two seeds, and the difference between them
+### Three seeding commands, and the difference between them
 
 | Command | Behaviour | Safe against existing data |
 |---|---|---|
 | `npm run db:seed` | **TRUNCATEs every table**, then rebuilds | ❌ no |
 | `npm run db:seed:demo` | Upsert-only, scoped to one organisation | ✅ yes |
+| `npm run db:demo:reset` | Deletes and rebuilds **one** organisation | ✅ yes, outside that organisation |
 
 **`npm run db:seed` truncates every table.** It is destructive by design. It
 must never be pointed at production, and never at a demo database
@@ -42,6 +43,40 @@ DEMO_ORG_SLUG=meridian npm run db:seed:demo   # or target an existing organisati
 Demo accounts are `admin@<slug>.invalid`, `analyst@<slug>.invalid` and
 `viewer@<slug>.invalid`, all using `DEMO_USER_PASSWORD`. The seed never prints
 the password, and an account that already exists keeps the password it has.
+
+**`npm run db:demo:reset` returns the demo tenant to a known state.** The seed
+is additive, so an estate that has been clicked around during a rehearsal keeps
+whatever was added to it. This is the other half: it removes the demo
+organisation's records and re-seeds them, so every demonstration starts from
+the same dataset. Run it before a customer demonstration.
+
+```bash
+npm run db:demo:reset                      # rebuild "Drishti Demo Healthcare"
+DEMO_ORG_SLUG=meridian npm run db:demo:reset   # or target another organisation
+```
+
+This one genuinely deletes, so the scoping is enforced rather than intended:
+
+- Every statement carries `organizationId`, directly or through the parent that
+  owns the row. There is no `TRUNCATE`, no `DROP`, no raw SQL and no unscoped
+  delete -- a test reads the file's source and fails if any appear, and a
+  second test fails if any `deleteMany` lacks a `where` clause.
+- Rows in every *other* organisation are counted immediately before and after
+  the deletions **inside the same transaction**. If one count moves, the
+  transaction rolls back and nothing is deleted at all. A scoping mistake
+  therefore fails loudly and changes nothing.
+- It refuses to run under `NODE_ENV=production` unless
+  `DEMO_RESET_ALLOW_PRODUCTION=yes` is set explicitly.
+- The organisation row, the demo user accounts and their memberships are kept.
+  An operator who changed the demo password would be surprised to find it
+  silently reverted, and keeping the organisation keeps its id stable.
+- Audit events belonging to no organisation (failed logins) are out of scope by
+  definition and are left alone.
+
+Running it repeatedly produces the same dataset: 12 assets, 5 vendors, 8
+controls, 5 policies, 9 remediations, 7 threats and 13 backdated audit events,
+spanning every risk band. Scores are produced by the risk engine from that
+graph, not written as literals, so they are reproducible rather than fixed.
 
 The test database has two independent guards, because the test fixtures
 truncate on every `beforeEach`:
