@@ -16,11 +16,32 @@ nothing else; there is no build-time or runtime dependency on the client.
 | demo | `DATABASE_URL` → a demo database | yes, deliberately | `prisma migrate deploy` |
 | production | `DATABASE_URL` → production | **never** | `prisma migrate deploy`, release step |
 
-### The one rule that matters
+### Two seeds, and the difference between them
 
-**`npm run db:seed` truncates every table.** It is how the demo dataset is
-built, and it is destructive by design. It must never be pointed at
-production, and never at a demo database mid-demonstration.
+| Command | Behaviour | Safe against existing data |
+|---|---|---|
+| `npm run db:seed` | **TRUNCATEs every table**, then rebuilds | ❌ no |
+| `npm run db:seed:demo` | Upsert-only, scoped to one organisation | ✅ yes |
+
+**`npm run db:seed` truncates every table.** It is destructive by design. It
+must never be pointed at production, and never at a demo database
+mid-demonstration.
+
+**`npm run db:seed:demo` is the one to reach for otherwise.** It contains no
+deleteMany, TRUNCATE, DROP, raw SQL or migration reset -- there is a test that
+reads its source and fails if any of those appear. Everything it writes lives
+inside a single organisation looked up by slug, so a populated database gains a
+demo tenant beside its existing data rather than losing any of it. Running it
+repeatedly is a no-op after the first time.
+
+```bash
+npm run db:seed:demo                      # creates or tops up "Drishti Demo Healthcare"
+DEMO_ORG_SLUG=meridian npm run db:seed:demo   # or target an existing organisation
+```
+
+Demo accounts are `admin@<slug>.invalid`, `analyst@<slug>.invalid` and
+`viewer@<slug>.invalid`, all using `DEMO_USER_PASSWORD`. The seed never prints
+the password, and an account that already exists keeps the password it has.
 
 The test database has two independent guards, because the test fixtures
 truncate on every `beforeEach`:
