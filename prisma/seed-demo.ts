@@ -41,7 +41,9 @@ import type { AuditAction } from "../src/generated/prisma/client.js";
  * Usage:  npm run db:seed:demo
  */
 
-const ORG_SLUG = process.env.DEMO_ORG_SLUG ?? "drishti-demo";
+/** The tenant this seed owns. `reset-demo.ts` scopes its deletions by it. */
+export const DEMO_ORG_SLUG = process.env.DEMO_ORG_SLUG ?? "drishti-demo";
+const ORG_SLUG = DEMO_ORG_SLUG;
 const ORG_NAME = process.env.DEMO_ORG_NAME ?? "Drishti Demo Healthcare";
 
 const day = 24 * 60 * 60 * 1000;
@@ -87,6 +89,13 @@ const ASSETS = [
   // looks for is true of it, and no control has ever been applied -- so it
   // earns the top band from the graph rather than from a hardcoded score.
   { key: "legacy", name: "Legacy Records Exchange", type: "DATABASE", phiVolume: 521_000, encrypted: false, mfaEnabled: false, assessedDaysAgo: null },
+  // Three systems that land in the bands a demonstration needs to show but
+  // that the original nine left empty. Each earns its score the same way
+  // everything else does -- from PHI volume, access, vendor reach, flows and
+  // control coverage -- so none of them is a number written down by hand.
+  { key: "research", name: "Research Data Repository", type: "DATABASE", phiVolume: 268_000, encrypted: false, mfaEnabled: false, assessedDaysAgo: null },
+  { key: "pharmacy", name: "Pharmacy Dispensing System", type: "OTHER", phiVolume: 210_000, encrypted: false, mfaEnabled: false, assessedDaysAgo: 74 },
+  { key: "triage", name: "Emergency Triage Board", type: "OTHER", phiVolume: 62_000, encrypted: false, mfaEnabled: false, assessedDaysAgo: 61 },
 ] as const;
 
 const PHI_TYPES = [
@@ -112,6 +121,12 @@ const ASSET_PHI = [
   { asset: "legacy", phi: "clinical", recordsPerDay: 31_500 },
   { asset: "legacy", phi: "demographic", recordsPerDay: 31_500 },
   { asset: "legacy", phi: "financial", recordsPerDay: 14_200 },
+  { asset: "research", phi: "genomic", recordsPerDay: 4_800 },
+  { asset: "research", phi: "clinical", recordsPerDay: 26_300 },
+  { asset: "pharmacy", phi: "clinical", recordsPerDay: 17_900 },
+  { asset: "pharmacy", phi: "demographic", recordsPerDay: 17_900 },
+  { asset: "triage", phi: "clinical", recordsPerDay: 8_700 },
+  { asset: "triage", phi: "demographic", recordsPerDay: 8_700 },
 ] as const;
 
 const FLOWS = [
@@ -125,6 +140,9 @@ const FLOWS = [
   { source: "telehealth", target: "ehr", phi: "clinical", recordsPerDay: 6_100, encrypted: true },
   { source: "legacy", target: "claims", phi: "financial", recordsPerDay: 14_200, encrypted: false },
   { source: "legacy", target: "warehouse", phi: "clinical", recordsPerDay: 31_500, encrypted: false },
+  { source: "research", target: "warehouse", phi: "genomic", recordsPerDay: 4_800, encrypted: false },
+  { source: "pharmacy", target: "billing", phi: "financial", recordsPerDay: 17_900, encrypted: false },
+  { source: "triage", target: "ehr", phi: "clinical", recordsPerDay: 8_700, encrypted: false },
 ] as const;
 
 const IDENTITIES = [
@@ -155,14 +173,24 @@ const GRANTS = [
   { identity: "raman", asset: "legacy", level: "WRITE", grantedDaysAgo: 880, usedDaysAgo: 210 },
   { identity: "brandt", asset: "legacy", level: "ADMIN", grantedDaysAgo: 870, usedDaysAgo: 300 },
   { identity: "svc-sync", asset: "legacy", level: "WRITE", grantedDaysAgo: 850, usedDaysAgo: 2 },
+  { identity: "ortiz", asset: "research", level: "READ", grantedDaysAgo: 330, usedDaysAgo: 6 },
+  { identity: "adeyemi", asset: "research", level: "ADMIN", grantedDaysAgo: 340, usedDaysAgo: 9 },
+  { identity: "raman", asset: "research", level: "WRITE", grantedDaysAgo: 320, usedDaysAgo: 41 },
+  { identity: "svc-sync", asset: "research", level: "WRITE", grantedDaysAgo: 310, usedDaysAgo: 1 },
+  { identity: "raman", asset: "pharmacy", level: "WRITE", grantedDaysAgo: 470, usedDaysAgo: 3 },
+  { identity: "ortiz", asset: "pharmacy", level: "READ", grantedDaysAgo: 450, usedDaysAgo: 2 },
+  { identity: "ortiz", asset: "triage", level: "READ", grantedDaysAgo: 290, usedDaysAgo: 1 },
+  { identity: "adeyemi", asset: "triage", level: "ADMIN", grantedDaysAgo: 295, usedDaysAgo: 8 },
+  { identity: "raman", asset: "triage", level: "WRITE", grantedDaysAgo: 280, usedDaysAgo: 96 },
+  { identity: "brandt", asset: "triage", level: "ADMIN", grantedDaysAgo: 275, usedDaysAgo: 233 },
 ] as const;
 
 const VENDORS = [
-  { key: "northgate", name: "Northgate Claims Services", baaStatus: "MISSING", phiVolume: 88_700, assessedDaysAgo: null, assets: ["claims", "billing", "legacy"] },
+  { key: "northgate", name: "Northgate Claims Services", baaStatus: "MISSING", phiVolume: 88_700, assessedDaysAgo: null, assets: ["claims", "billing", "legacy", "pharmacy"] },
   { key: "vertex", name: "Vertex Imaging Cloud", baaStatus: "SIGNED", phiVolume: 154_000, assessedDaysAgo: 120, assets: ["imaging"] },
-  { key: "helix", name: "Helix Genomics Partners", baaStatus: "PENDING", phiVolume: 3_450, assessedDaysAgo: 210, assets: ["warehouse"] },
+  { key: "helix", name: "Helix Genomics Partners", baaStatus: "PENDING", phiVolume: 3_450, assessedDaysAgo: 210, assets: ["warehouse", "research"] },
   { key: "lumen", name: "Lumen Analytics", baaStatus: "SIGNED", phiVolume: 312_000, assessedDaysAgo: 45, assets: ["warehouse"] },
-  { key: "archive9", name: "Archive Nine Backup", baaStatus: "EXPIRED", phiVolume: 486_000, assessedDaysAgo: 500, assets: ["ehr", "legacy"] },
+  { key: "archive9", name: "Archive Nine Backup", baaStatus: "EXPIRED", phiVolume: 486_000, assessedDaysAgo: 500, assets: ["ehr", "legacy", "triage"] },
 ] as const;
 
 const THREATS = [
@@ -171,6 +199,7 @@ const THREATS = [
   { key: "escalation", asset: "ehr", severity: "HIGH", status: "OPEN", title: "Repeated privilege escalation attempts", description: "An analyst-level account issued four consecutive role-change requests against the EHR within two minutes.", hoursAgo: 58, resolvedHoursAgo: null },
   { key: "scan", asset: "portal", severity: "MEDIUM", status: "RESOLVED", title: "Credential stuffing against the patient portal", description: "Distributed login attempts across 900 accounts. Rate limiting held; no session was established.", hoursAgo: 190, resolvedHoursAgo: 150 },
   { key: "legacy-exfil", asset: "legacy", severity: "CRITICAL", status: "OPEN", title: "Sustained outbound transfer from legacy exchange", description: "14 GB transferred from the legacy records exchange to an unrecognised destination over six hours. The system is unencrypted at rest and in transit.", hoursAgo: 4, resolvedHoursAgo: null },
+  { key: "triage-share", asset: "triage", severity: "HIGH", status: "OPEN", title: "Shared workstation session left open on the triage board", description: "A triage board session stayed authenticated for eleven hours on a shared workstation in a public corridor, spanning three shift changes.", hoursAgo: 21, resolvedHoursAgo: null },
   { key: "noise", asset: "lab", severity: "LOW", status: "FALSE_POSITIVE", title: "Anomalous query volume on the lab API", description: "Flagged by the detector; traced to a scheduled reconciliation job that had been rescheduled.", hoursAgo: 260, resolvedHoursAgo: 240 },
 ] as const;
 
@@ -182,11 +211,11 @@ const THREATS = [
 const CONTROLS = [
   { key: "mfa", name: "Multi-Factor Authentication", description: "MFA required for all interactive access to systems holding PHI.", category: "ACCESS", status: "PARTIAL", effectiveness: "PARTIALLY_EFFECTIVE", owner: "Samuel Adeyemi", frameworkRef: "HIPAA 164.312(d)", reviewedDaysAgo: 40, assets: ["portal", "ehr", "lab", "telehealth"] },
   { key: "enc-rest", name: "Encryption at Rest", description: "AES-256 for all stored PHI, with keys held in a managed KMS.", category: "ENCRYPTION", status: "IMPLEMENTED", effectiveness: "EFFECTIVE", owner: "Samuel Adeyemi", frameworkRef: "HIPAA 164.312(a)(2)(iv)", reviewedDaysAgo: 22, assets: ["portal", "ehr", "lab", "imaging", "warehouse", "telehealth"] },
-  { key: "enc-transit", name: "Encryption in Transit", description: "TLS 1.2 or better on every interface carrying PHI between systems.", category: "ENCRYPTION", status: "PARTIAL", effectiveness: "PARTIALLY_EFFECTIVE", owner: "Samuel Adeyemi", frameworkRef: "HIPAA 164.312(e)(1)", reviewedDaysAgo: 22, assets: ["portal", "ehr", "lab", "telehealth"] },
-  { key: "least-priv", name: "Least Privilege Access", description: "Access granted at the lowest level required, re-evaluated on role change.", category: "ACCESS", status: "PARTIAL", effectiveness: "INEFFECTIVE", owner: "Priya Raman", frameworkRef: "HIPAA 164.308(a)(4)", reviewedDaysAgo: 140, assets: ["billing", "claims", "imaging"] },
+  { key: "enc-transit", name: "Encryption in Transit", description: "TLS 1.2 or better on every interface carrying PHI between systems.", category: "ENCRYPTION", status: "PARTIAL", effectiveness: "PARTIALLY_EFFECTIVE", owner: "Samuel Adeyemi", frameworkRef: "HIPAA 164.312(e)(1)", reviewedDaysAgo: 22, assets: ["portal", "ehr", "lab", "telehealth", "pharmacy"] },
+  { key: "least-priv", name: "Least Privilege Access", description: "Access granted at the lowest level required, re-evaluated on role change.", category: "ACCESS", status: "PARTIAL", effectiveness: "INEFFECTIVE", owner: "Priya Raman", frameworkRef: "HIPAA 164.308(a)(4)", reviewedDaysAgo: 140, assets: ["billing", "claims", "imaging", "research", "pharmacy"] },
   { key: "access-review", name: "Periodic Access Review", description: "Every access grant reviewed and attested at least quarterly.", category: "GOVERNANCE", status: "PLANNED", effectiveness: "NOT_ASSESSED", owner: "Priya Raman", frameworkRef: "HIPAA 164.308(a)(3)(ii)(B)", reviewedDaysAgo: null, assets: [] },
   { key: "vendor-baa", name: "Vendor BAA Management", description: "A signed Business Associate Agreement before any vendor touches PHI.", category: "VENDOR", status: "PARTIAL", effectiveness: "INEFFECTIVE", owner: "Priya Raman", frameworkRef: "HIPAA 164.308(b)(1)", reviewedDaysAgo: 95, assets: ["claims", "billing", "imaging"] },
-  { key: "logging", name: "Security Logging", description: "All PHI access logged with actor, timestamp and source address.", category: "MONITORING", status: "IMPLEMENTED", effectiveness: "EFFECTIVE", owner: "Samuel Adeyemi", frameworkRef: "HIPAA 164.312(b)", reviewedDaysAgo: 11, assets: ["ehr", "billing", "claims", "warehouse"] },
+  { key: "logging", name: "Security Logging", description: "All PHI access logged with actor, timestamp and source address.", category: "MONITORING", status: "IMPLEMENTED", effectiveness: "EFFECTIVE", owner: "Samuel Adeyemi", frameworkRef: "HIPAA 164.312(b)", reviewedDaysAgo: 11, assets: ["ehr", "billing", "claims", "warehouse", "research", "triage"] },
   { key: "backup", name: "Backup & Recovery", description: "Daily encrypted backups with a tested quarterly restore.", category: "RESILIENCE", status: "NOT_IMPLEMENTED", effectiveness: "NOT_ASSESSED", owner: "Samuel Adeyemi", frameworkRef: "HIPAA 164.308(a)(7)", reviewedDaysAgo: null, assets: [] },
 ] as const;
 
@@ -212,6 +241,9 @@ const ASSESSMENTS = [
   { asset: "claims", likelihood: 5, impact: 4 },
   { asset: "telehealth", likelihood: 2, impact: 3 },
   { asset: "legacy", likelihood: 5, impact: 5 },
+  { asset: "research", likelihood: 5, impact: 5 },
+  { asset: "pharmacy", likelihood: 4, impact: 4 },
+  { asset: "triage", likelihood: 5, impact: 3 },
 ] as const;
 
 const VENDOR_ASSESSMENTS = [
@@ -273,6 +305,22 @@ const REMEDIATIONS = [
     control: "mfa",
   },
   {
+    title: "Research Data Repository holds genomic PHI without encryption",
+    description: "The research repository holds 268,000 PHI records including genomic sequences, is unencrypted at rest, requires no MFA, is reachable by a vendor without a signed BAA, and exports genomic data to the warehouse over an unencrypted channel.",
+    recommendation: "Encrypt the repository at rest, place it behind MFA, and move the warehouse export onto TLS before the next research data release.",
+    severity: "CRITICAL", status: "IN_PROGRESS", source: "RISK",
+    owner: "analyst", dueInDays: 14, resolvedDaysAgo: null,
+    asset: "research",
+  },
+  {
+    title: "Shared triage workstation leaves authenticated sessions open",
+    description: "A triage board session remained authenticated for eleven hours on a shared workstation in a public corridor. The board holds 62,000 PHI records and enforces no MFA.",
+    recommendation: "Enforce a fifteen-minute idle timeout on the triage board and require re-authentication at shift change.",
+    severity: "HIGH", status: "RESOLVED", source: "THREAT",
+    owner: "admin", dueInDays: null, resolvedDaysAgo: 1,
+    threat: "triage-share",
+  },
+  {
     title: "Unused service account holds WRITE access to the claims gateway",
     description: "svc-claims-bridge holds WRITE access to the claims gateway and has no recorded use since it was granted.",
     recommendation: "Retire the service account, or document the integration that requires it to remain.",
@@ -290,7 +338,8 @@ const REMEDIATIONS = [
  * by the engine itself further down, not listed here.
  */
 const HISTORICAL_AUDIT: Array<{
-  action: AuditAction; entityType: string; entity: string; kind: "asset" | "vendor" | "control";
+  action: AuditAction; entityType: string; entity: string;
+  kind: "asset" | "vendor" | "control" | "threat" | "remediation";
   metadata: Record<string, unknown>; daysAgo: number;
 }> = [
   { action: "ASSET_CREATED", entityType: "Asset", entity: "ehr", kind: "asset", metadata: { name: "Cardiology EHR", discoveredBy: "estate import" }, daysAgo: 96 },
@@ -300,6 +349,12 @@ const HISTORICAL_AUDIT: Array<{
   { action: "VENDOR_UPDATED", entityType: "Vendor", entity: "archive9", kind: "vendor", metadata: { changes: { baaStatus: { from: "SIGNED", to: "EXPIRED" } } }, daysAgo: 30 },
   { action: "CONTROL_UPDATED", entityType: "Control", entity: "least-priv", kind: "control", metadata: { changes: { effectiveness: { from: "PARTIALLY_EFFECTIVE", to: "INEFFECTIVE" } } }, daysAgo: 18 },
   { action: "ACCESS_REVIEWED", entityType: "Control", entity: "access-review", kind: "control", metadata: { note: "Quarterly review cycle opened" }, daysAgo: 12 },
+  { action: "CONTROL_LINKED_ASSET", entityType: "Control", entity: "enc-rest", kind: "control", metadata: { note: "Applied across the analytics estate" }, daysAgo: 25 },
+  { action: "RISK_CREATED", entityType: "Asset", entity: "legacy", kind: "asset", metadata: { note: "First risk assessment recorded for this system" }, daysAgo: 95 },
+  { action: "THREAT_CREATED", entityType: "Threat", entity: "scan", kind: "threat", metadata: { detector: "authentication anomaly", severity: "MEDIUM" }, daysAgo: 8 },
+  { action: "THREAT_STATUS_CHANGED", entityType: "Threat", entity: "scan", kind: "threat", metadata: { changes: { status: { from: "OPEN", to: "RESOLVED" } } }, daysAgo: 6 },
+  { action: "REMEDIATION_CREATED", entityType: "Remediation", entity: "Decommission or secure the Legacy Records Exchange", kind: "remediation", metadata: { severity: "CRITICAL", source: "RISK" }, daysAgo: 9 },
+  { action: "REMEDIATION_RESOLVED", entityType: "Remediation", entity: "MFA not enforced on the Analytics Warehouse", kind: "remediation", metadata: { changes: { status: { from: "IN_PROGRESS", to: "RESOLVED" } } }, daysAgo: 4 },
 ];
 
 // ──────────────────────────────────────────────────────────────── helpers
@@ -720,17 +775,19 @@ export async function seedDemo(options: { quiet?: boolean } = {}): Promise<SeedS
   // Remediation has no unique constraint -- a real estate can legitimately
   // raise two findings with the same title -- so idempotency is a deliberate
   // lookup on (organizationId, title).
+  const remediationIds: Record<string, number> = {};
   for (const r of REMEDIATIONS) {
     const existing = await prisma.remediation.findFirst({
       where: { organizationId, title: r.title },
       select: { id: true },
     });
     if (existing) {
+      remediationIds[r.title] = existing.id;
       bump(reused, "remediations");
       continue;
     }
 
-    await prisma.remediation.create({
+    const row = await prisma.remediation.create({
       data: {
         organizationId,
         title: r.title, description: r.description, recommendation: r.recommendation,
@@ -745,6 +802,7 @@ export async function seedDemo(options: { quiet?: boolean } = {}): Promise<SeedS
         identityId: "identity" in r && r.identity ? identityId(r.identity) : null,
       },
     });
+    remediationIds[r.title] = row.id;
     bump(created, "remediations");
   }
 
@@ -753,6 +811,8 @@ export async function seedDemo(options: { quiet?: boolean } = {}): Promise<SeedS
     const entityId =
       e.kind === "asset" ? assetId(e.entity)
       : e.kind === "vendor" ? vendorId(e.entity)
+      : e.kind === "threat" ? threatId(e.entity)
+      : e.kind === "remediation" ? remediationIds[e.entity]!
       : controlId(e.entity);
 
     await ensureAudit(ctx, {
