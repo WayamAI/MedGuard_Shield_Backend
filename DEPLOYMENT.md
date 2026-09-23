@@ -52,7 +52,7 @@ Verify:
 
 ```bash
 curl -s localhost:4000/health
-# {"status":"ok","service":"drishti-api","version":"0.2.0"}
+# {"status":"ok","service":"drishti-api","version":"0.3.0"}
 ```
 
 ## Tests

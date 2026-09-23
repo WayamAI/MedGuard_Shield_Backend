@@ -6,15 +6,15 @@ captured from a running server, not written from the schema.
 
 | | |
 |---|---|
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Base URL (dev) | `http://localhost:4000` |
-| Endpoints | 86 (1 public, 85 authenticated) |
+| Endpoints | 88 (1 public, 87 authenticated) |
 | Content type | JSON, except CSV upload (`multipart/form-data`) and template download (`text/csv`) |
 
 **If you are building the client, read
 [`FRONTEND_API_CONTRACT.md`](./FRONTEND_API_CONTRACT.md) first** — it leads
-with the four breaking changes from v0.1 and maps the demo walkthrough to
-endpoints. This document is the per-endpoint detail.
+with the breaking changes (two rounds of them) and maps the demo walkthrough
+to endpoints. This document is the per-endpoint detail.
 
 ---
 
@@ -99,16 +99,30 @@ applies to writes too — a foreign id in a request body is rejected, not stored
 
 ## Roles
 
+The line is **configuration versus assessment**: ADMIN decides what the estate
+*is*, ANALYST works within it.
+
 | Capability | VIEWER | ANALYST | ADMIN |
 |---|:-:|:-:|:-:|
 | Read any endpoint except audit | ✅ | ✅ | ✅ |
-| Create / update / assess / triage / grant | ❌ | ✅ | ✅ |
-| Archive / restore | ❌ | ❌ | ✅ |
+| Assess / recompute asset and vendor risk | ❌ | ✅ | ✅ |
+| Create, update and triage threats | ❌ | ✅ | ✅ |
+| Create, assign and transition remediation | ❌ | ✅ | ✅ |
+| Attest an access review | ❌ | ✅ | ✅ |
+| Record a control's status / effectiveness / review date | ❌ | ✅ | ✅ |
+| Create / update / archive assets, vendors, identities | ❌ | ❌ | ✅ |
+| Grant, re-level or revoke access | ❌ | ❌ | ✅ |
+| Create / rename / archive controls and policies | ❌ | ❌ | ✅ |
 | CSV import (all four endpoints) | ❌ | ❌ | ✅ |
 | Read the audit trail | ❌ | ❌ | ✅ |
 
-Roles are per-organisation and flat — there is no hierarchy, so every gate
-lists the roles it accepts. Unauthenticated calls to gated routes return
+Roles are per-organisation and flat — there is no hierarchy. The matrix is one
+table in `src/lib/permissions.ts`; routes name the operation
+(`requirePermission("asset:create")`) and a 403 names the permission it wanted.
+
+**Controls are field-scoped for ANALYST:** `status`, `effectiveness` and
+`lastReviewedAt` are assessment; everything else on a control is configuration
+and needs ADMIN. The 403 names the offending fields. Unauthenticated calls to gated routes return
 **401**, not 403: authentication is checked before authorisation.
 
 Demo accounts (shared `DEMO_USER_PASSWORD`): `admin@meridian.org` (ADMIN),
@@ -165,7 +179,8 @@ audit, and every `/:id/history` route.
 | Threat `severity` | `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
 | Threat `status` | `OPEN`, `INVESTIGATING`, `RESOLVED`, `FALSE_POSITIVE` |
 | Risk `band` | `LOW`, `MODERATE`, `HIGH`, `CRITICAL`, `EXTREME` |
-| Risk change `reason` | `INITIAL_ASSESSMENT`, `MANUAL_ASSESSMENT`, `RECOMPUTE`, `IMPORTED` |
+| Risk change `reason` | `INITIAL_ASSESSMENT`, `MANUAL_ASSESSMENT`, `RECOMPUTE`, `IMPORTED`, `ASSET_CHANGED`, `PHI_CHANGED`, `ACCESS_CHANGED`, `VENDOR_ACCESS_CHANGED`, `CONTROL_CHANGED`, `THREAT_CHANGED` |
+| Risk `subjectType` | `ASSET`, `VENDOR` |
 | Flow `status` | `ok`, `warn`, `violation` *(lowercase — the one exception)* |
 | Access `flags[]` | `STALE`, `NEVER_USED`, `NO_MFA`, `INACTIVE_IDENTITY`, `EXCESSIVE_LEVEL` |
 | Control `category` | `ACCESS`, `ENCRYPTION`, `MONITORING`, `GOVERNANCE`, `RESILIENCE`, `VENDOR` |
@@ -185,6 +200,54 @@ score = (likelihood × impact × exposure × controlGap) / 625 × 100    (2 dp)
 Each input is an integer 1–5. Bands are upper bounds on the 0–100 score:
 `≤20 LOW`, `≤40 MODERATE`, `≤60 HIGH`, `≤80 CRITICAL`, else `EXTREME`. The
 curve is steep because it is a product of four factors: 4/4/4/3 scores 30.72.
+
+### Where the four factors come from
+
+| Factor | Source |
+|---|---|
+| `likelihood` | **Assessor judgement.** Only ever set by an assessment. |
+| `impact` | **Assessor judgement.** Only ever set by an assessment. |
+| `exposure` | **Derived** from PHI volume, encryption, MFA, live grants and their levels, vendor reach, unencrypted outbound flows, and open HIGH/CRITICAL threats. |
+| `controlGap` | **Derived** from applied controls that are IMPLEMENTED+EFFECTIVE (weight 1.0) or PARTIAL/PARTIALLY_EFFECTIVE (0.5). |
+
+The two derived factors are recomputed automatically whenever a mutation
+changes one of their inputs. Supplying either in an assessment **pins** it —
+`exposureOverridden` / `controlGapOverridden` go true and the derivation leaves
+that factor alone until a later assessment omits it. Assessor judgement
+outranks the derivation, always.
+
+Every derived value ships with a `derivation` string naming the facts behind
+it. There is no model, no fitted weighting, and no free-text narrative: the
+thresholds are constants in `src/services/riskFactors.ts`.
+
+### Automatic recomputation
+
+These mutations trigger a rescore of the affected subject(s):
+
+| Mutation | Reason recorded | Subjects rescored |
+|---|---|---|
+| Asset `phiVolume` / `encrypted` / `mfaEnabled` changed | `ASSET_CHANGED` | that asset |
+| Access granted, re-levelled or revoked | `ACCESS_CHANGED` | that asset |
+| Identity archived (revokes every grant) | `ACCESS_CHANGED` | every asset it could reach |
+| Vendor↔asset link added or removed | `VENDOR_ACCESS_CHANGED` | the vendor and its assets |
+| Vendor `baaStatus` / `lastAssessedAt` changed | `VENDOR_ACCESS_CHANGED` | that vendor |
+| Control applied to / removed from an asset | `CONTROL_CHANGED` | that asset |
+| Control `status` / `effectiveness` changed | `CONTROL_CHANGED` | every asset it is applied to |
+| Threat created, or transitioned in/out of open HIGH/CRITICAL | `THREAT_CHANGED` | that asset |
+| Risk CSV imported | `IMPORTED` | the imported assets |
+
+Three guarantees, each covered by tests:
+
+- **No loop.** Recalculation reads the graph and writes only Risk, RiskHistory
+  and AuditEvent — never an asset, vendor, grant, control or threat.
+- **No noise.** A recalculation that changes nothing writes no history row, and
+  mutations that cannot move a score (renaming an asset) do not fire at all.
+- **No invented assessments.** An unassessed subject stays unassessed no matter
+  what changes around it.
+
+Mutations that trigger a rescore return `riskChanged` alongside the updated
+record — the new snapshot, or `null`. Vendor-link routes return an array,
+because both sides can move.
 
 ### Flow status
 
@@ -207,7 +270,7 @@ curl -s http://localhost:4000/health
 ```
 
 ```json
-{ "status": "ok", "service": "drishti-api", "version": "0.2.0" }
+{ "status": "ok", "service": "drishti-api", "version": "0.3.0" }
 ```
 
 > Use `/health`. `/api/health` does not exist and returns 401 from the auth gate.

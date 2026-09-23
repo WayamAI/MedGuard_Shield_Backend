@@ -1,6 +1,6 @@
 {
   "name": "medguard-backend",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Drishti \u2014 Healthcare PHI Risk Intelligence Platform API",
   "type": "module",

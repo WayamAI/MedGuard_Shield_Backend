@@ -7,12 +7,14 @@ can call it.
 | | |
 |---|---|
 | Base URL (dev) | `http://localhost:4000` |
-| Endpoints | **86** (was 22) |
-| Tests | 361 passing |
+| Endpoints | **88** (was 22) |
+| Tests | 529 passing |
 | Branch | `feat/drishti-platform-foundation` (not merged — see the report) |
 
-**Read [Breaking changes](#breaking-changes) first.** Four existing contracts
-changed. Everything else is additive.
+**Read [Breaking changes](#breaking-changes) first.** There are two rounds:
+four from the platform rebuild, and three more from the productionisation pass
+that closed the analyst-permissions, automatic-recomputation and
+vendor-risk-history gaps. Everything else is additive.
 
 ---
 
@@ -33,7 +35,86 @@ changed. Everything else is additive.
 
 ## Breaking changes
 
-Four. Each is listed with what to change.
+Seven across two rounds. Each is listed with what to change.
+
+---
+
+# Round 2 — productionisation (read these first, they are newer)
+
+### A. ANALYST can no longer change the inventory
+
+**This is the big one.** Writes used to be a single tier: anything an ADMIN
+could do, an ANALYST could do. That is now split along a line:
+
+> **ADMIN configures the estate. ANALYST works within it.**
+
+| ANALYST can | ANALYST now gets 403 |
+|---|---|
+| Assess asset & vendor risk, recompute | Create / update / archive assets |
+| Create, update and triage threats | Create / update / archive vendors |
+| Create, assign, resolve, reopen remediation | Create / update / archive identities |
+| Attest an access review | Grant, re-level or revoke access |
+| Record a control's status / effectiveness / review date | Create, rename, recategorise or archive a control |
+| Read everything except the audit trail | Create / update / archive policies, run imports, read audit |
+
+**What to change:** gate the buttons. The 403 body now names the permission —
+`"Requires one of: ADMIN (permission: asset:create)"` — so you can drive
+enablement off the role in the token rather than trial and error. Roles come
+from `GET /api/auth/me`.
+
+**Controls are field-scoped.** An ANALYST may PATCH `status`, `effectiveness`
+and `lastReviewedAt`; anything else is 403 and the message names the offending
+fields, so you can disable just those inputs.
+
+### B. Assessments take two factors, not four
+
+`POST /api/assets/:id/assessment` and the vendor equivalent now require only
+`likelihood` and `impact`. `exposure` and `controlGap` are **derived from
+recorded facts** and computed server-side.
+
+```diff
+- { "likelihood": 4, "impact": 5, "exposure": 4, "controlGap": 3 }
++ { "likelihood": 4, "impact": 5 }
+```
+
+Sending the old four-field body still works and is **not** an error — but it
+now means something specific: supplying `exposure` or `controlGap` **pins**
+that factor, and automatic recomputation will stop touching it. The response
+carries `exposureOverridden` / `controlGapOverridden` so you can show which
+numbers are the assessor's and which the system derives. Omitting a factor in
+a later assessment releases the pin.
+
+Responses also carry `derivation` — a plain-language string of the facts
+behind the derived numbers, e.g. `"exposure 4 (120,000 PHI records; PHI stored
+unencrypted; access not protected by MFA; 1 vendor(s) can reach it)"`. Render
+it as the "why"; do not compose your own.
+
+### C. Risk now moves on its own
+
+Scores change without anyone pressing recompute. Eleven mutations trigger it —
+asset PHI volume / encryption / MFA, access granted, re-levelled or revoked, an
+identity archived, vendor reach added or removed, vendor BAA state, a control
+applied, removed or reassessed, and a severe threat opening or closing.
+
+**What to change:** do not cache a risk score across a mutation. Responses from
+triggering mutations carry `riskChanged` — the new snapshot, or `null` if
+nothing moved — so you can update in place without a refetch:
+
+```js
+const res = await patchAsset(id, { phiVolume: 400000 });
+if (res.data.riskChanged) showRiskMoved(res.data.riskChanged);
+```
+
+`riskChanged` is a single snapshot on asset/access/threat/control routes and an
+**array** on vendor-link routes (both sides of the relationship can move).
+
+New `RiskChangeReason` values you will see in history: `ASSET_CHANGED`,
+`PHI_CHANGED`, `ACCESS_CHANGED`, `VENDOR_ACCESS_CHANGED`, `CONTROL_CHANGED`,
+`THREAT_CHANGED`.
+
+---
+
+# Round 1 — the platform rebuild
 
 ### 1. `/api/access` and `/api/threats` now return arrays, not objects
 
@@ -183,15 +264,25 @@ Only one organisation exists in the demo data.
 
 ## Roles
 
-Three, flat, no hierarchy. The role is per-organisation.
+Three, flat, no hierarchy. The role is per-organisation, and the line is
+**configuration versus assessment**.
 
-| | VIEWER | ANALYST | ADMIN |
-|---|---|---|---|
-| Read everything | ✅ | ✅ | ✅ |
-| Create / update / assess / triage | ❌ | ✅ | ✅ |
-| Archive, restore | ❌ | ❌ | ✅ |
+| Operation | VIEWER | ANALYST | ADMIN |
+|---|:-:|:-:|:-:|
+| Read anything except the audit trail | ✅ | ✅ | ✅ |
+| Assess / recompute asset and vendor risk | ❌ | ✅ | ✅ |
+| Create, update, triage threats | ❌ | ✅ | ✅ |
+| Create, assign, transition remediation | ❌ | ✅ | ✅ |
+| Attest an access review | ❌ | ✅ | ✅ |
+| Record a control's status / effectiveness / review date | ❌ | ✅ | ✅ |
+| Create / update / archive assets, vendors, identities | ❌ | ❌ | ✅ |
+| Grant, re-level or revoke access | ❌ | ❌ | ✅ |
+| Create / rename / archive controls and policies | ❌ | ❌ | ✅ |
 | Import CSV | ❌ | ❌ | ✅ |
-| Read audit trail | ❌ | ❌ | ✅ |
+| Read the audit trail | ❌ | ❌ | ✅ |
+
+The full matrix lives in `src/lib/permissions.ts` as one table. A 403 names the
+permission it wanted, e.g. `(permission: asset:create)`.
 
 A role failure is `403 FORBIDDEN` naming the roles required. **An
 unauthenticated call to a gated route is 401, never 403** — do not treat 401 as
@@ -275,7 +366,7 @@ to render the right buttons.
 | POST | `/api/assets/:id/restore` | ADMIN | |
 | POST | `/api/assets/:id/assessment` | ANALYST+ | **new** — `{ likelihood, impact, exposure, controlGap }` each 1–5. 201 first time, 200 after |
 | POST | `/api/assets/:id/recompute` | ANALYST+ | 404 if never assessed |
-| GET | `/api/assets/:id/risk-history` | any | **new** — score movement |
+| GET | `/api/assets/:id/risk-history` | any | score movement |
 | GET | `/api/assets/:id/history` | any | **new** — audit trail |
 | GET | `/api/assets/:id/control-evidence` | any | **new** — suggested control gap |
 | PUT/DELETE | `/api/assets/:id/controls/:controlId` | ANALYST+ | apply/remove a control |
@@ -296,7 +387,7 @@ openThreats, controls }` — so cards need no extra calls.
 |---|---|---|---|
 | GET | `/api/risks` | any | paginated, score desc |
 | GET | `/api/risks/distribution` | any | **new** — `{ LOW, MODERATE, HIGH, CRITICAL, EXTREME }` counts |
-| GET | `/api/risks/history` | any | **new** — estate-wide movement |
+| GET | `/api/risks/history` | any | estate-wide movement, assets and vendors. `?subjectType=ASSET\|VENDOR` |
 | POST | `/api/risks/:assetId/recompute` | ANALYST+ | **deprecated alias** |
 
 Risk history entry:
@@ -314,9 +405,18 @@ Risk history entry:
 ```
 
 `reason` is one of `INITIAL_ASSESSMENT`, `MANUAL_ASSESSMENT`, `RECOMPUTE`,
-`IMPORTED`. **There is no free-text explanation field, deliberately** — compose
-your "65 → 72 because…" wording from `reason` plus the factor deltas. The
-backend will not assert a cause it did not observe.
+`IMPORTED`, `ASSET_CHANGED`, `PHI_CHANGED`, `ACCESS_CHANGED`,
+`VENDOR_ACCESS_CHANGED`, `CONTROL_CHANGED`, `THREAT_CHANGED`.
+
+History entries carry `subjectType` (`ASSET` or `VENDOR`), `subjectId` and
+`subjectName`. Asset and vendor movement share one table and one endpoint
+shape; `/api/vendors/:id/risk-history` and `/api/assets/:id/risk-history` are
+the per-subject views.
+
+**There is still no free-text explanation field.** Compose your "65 → 72
+because…" wording from `reason` plus the `derivation` string on the snapshot —
+both are facts the system observed. The backend will not assert a cause it did
+not see.
 
 A recompute that changes nothing writes no history row.
 
@@ -330,7 +430,8 @@ A recompute that changes nothing writes no history row.
 | POST | `/api/vendors/:id/assessment` | ANALYST+ |
 | POST | `/api/vendors/:id/recompute` | ANALYST+ |
 | POST | `/api/vendors/:id/archive` \| `/restore` | ADMIN |
-| PUT/DELETE | `/api/vendors/:id/assets/:assetId` | ANALYST+ |
+| PUT/DELETE | `/api/vendors/:id/assets/:assetId` | **ADMIN** |
+| GET | `/api/vendors/:id/risk-history` | any | **new** — vendor score movement |
 | GET | `/api/vendors/:id/history` | any |
 
 Derived read-only fields: `daysSinceAssessment`, `assessmentOverdue` (>365
@@ -566,7 +667,6 @@ Do not build UI that assumes these exist.
 | **Notifications** | Not built. Derive banners from `overdueOnly`, `openOnly`, `assessmentOverdue`, `reviewOverdue`. |
 | **Org-switch endpoint** | Log in again with `organizationId`. |
 | **Signup / password reset / MFA** | Accounts are seeded. |
-| **Vendor risk history** | Asset risk history exists; the vendor equivalent does not yet. Do not build a vendor trend chart. |
 | **Threat/remediation status history as a timeline** | Transitions are in the audit trail (`/:id/history`), not a dedicated endpoint. |
 | **PHI type CRUD** | Import only. No REST endpoints. |
 | **Free-text risk-change explanations** | `reason` enum + factor deltas. Compose wording client-side. |
