@@ -284,6 +284,63 @@ describe("remediation workflow", () => {
     source: "RISK",
   };
 
+  /**
+   * Writes used to return the raw Prisma row while reads returned the shaped
+   * one, so POST answered with `assetId: 5` and no `subject` while GET on the
+   * same record answered with a hydrated `subject`, `owner`, `open` and
+   * `overdue`. A client that renders what a mutation hands back would have
+   * read undefined off every one of those fields.
+   *
+   * The existing tests never looked at a write response body, which is how it
+   * survived. These do.
+   */
+  it("returns the same shape from a write as from a read", async () => {
+    const created = await request(app)
+      .post("/api/remediations")
+      .set(auth(analyst))
+      .send({ ...openFinding, assetId: ids.billingId });
+    expect(created.status).toBe(201);
+
+    const id = created.body.data.id as number;
+    const read = await request(app).get(`/api/remediations/${id}`).set(auth(viewer));
+
+    // allowedTransitions is detail-only; every other key must match.
+    const readKeys = Object.keys(read.body.data).filter((k) => k !== "allowedTransitions").sort();
+    expect(Object.keys(created.body.data).sort()).toEqual(readKeys);
+
+    expect(created.body.data.subject.asset.id).toBe(ids.billingId);
+    expect(created.body.data.owner).toBeDefined();
+    expect(created.body.data.open).toBe(true);
+  });
+
+  it("does not leak raw foreign keys or organizationId from a write", async () => {
+    const created = await request(app)
+      .post("/api/remediations")
+      .set(auth(analyst))
+      .send({ ...openFinding, assetId: ids.billingId });
+
+    for (const leaked of ["assetId", "vendorId", "threatId", "controlId", "identityId", "ownerId", "organizationId"]) {
+      expect(created.body.data).not.toHaveProperty(leaked);
+    }
+  });
+
+  it("returns the shaped form from a transition too", async () => {
+    const created = await request(app)
+      .post("/api/remediations")
+      .set(auth(analyst))
+      .send({ ...openFinding, assetId: ids.billingId });
+
+    const moved = await request(app)
+      .post(`/api/remediations/${created.body.data.id}/status`)
+      .set(auth(analyst))
+      .send({ status: "IN_PROGRESS" });
+
+    expect(moved.status).toBe(200);
+    expect(moved.body.data.status).toBe("IN_PROGRESS");
+    expect(moved.body.data.subject.asset.id).toBe(ids.billingId);
+    expect(moved.body.data).not.toHaveProperty("assetId");
+  });
+
   it("creates a finding linked to the asset that raised it", async () => {
     const res = await request(app)
       .post("/api/remediations")
@@ -309,7 +366,8 @@ describe("remediation workflow", () => {
       .send({ ownerId: ids.adminUserId });
 
     expect(res.status).toBe(200);
-    expect(res.body.data.ownerId).toBe(ids.adminUserId);
+    // The shaped form carries the owner as an object, not a raw foreign key.
+    expect(res.body.data.owner.id).toBe(ids.adminUserId);
   });
 
   it("refuses to assign work to someone outside the organization", async () => {

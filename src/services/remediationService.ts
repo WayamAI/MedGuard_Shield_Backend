@@ -227,11 +227,23 @@ async function assertLinksInTenant(ctx: TenantContext, input: RemediationWriteIn
   await Promise.all(checks);
 }
 
+/**
+ * Every write returns the same shape a read does.
+ *
+ * These four used to return the raw Prisma row, so a caller that created or
+ * transitioned a remediation got `assetId: 5` and no `subject`, while the
+ * same record fetched a moment later came back with a hydrated `subject`,
+ * `owner`, `open` and `overdue`. One resource with two shapes is a trap for
+ * any client that renders what a mutation hands back, and it leaked the raw
+ * foreign keys and `organizationId` that the read shape deliberately omits.
+ */
 export async function createRemediation(ctx: TenantContext, input: RemediationWriteInput) {
   await assertLinksInTenant(ctx, input);
-  return prisma.remediation.create({
+  const row = await prisma.remediation.create({
     data: { ...input, organizationId: ctx.organizationId },
+    include: LIST_INCLUDE,
   });
+  return shape(row);
 }
 
 export async function updateRemediation(
@@ -243,8 +255,11 @@ export async function updateRemediation(
   if (!existing) throw new NotFoundError(`Remediation ${id} not found`);
   await assertLinksInTenant(ctx, input as RemediationWriteInput);
 
-  const after = await prisma.remediation.update({ where: { id }, data: input });
-  return { before: existing, after };
+  // `before` stays raw — the audit diff compares scalar columns.
+  const after = await prisma.remediation.update({
+    where: { id }, data: input, include: LIST_INCLUDE,
+  });
+  return { before: existing, after: shape(after) };
 }
 
 /**
@@ -274,9 +289,10 @@ export async function transitionRemediation(
   const after = await prisma.remediation.update({
     where: { id },
     data: { status: to, resolvedAt: closing ? new Date() : null },
+    include: LIST_INCLUDE,
   });
 
-  return { before: existing, after };
+  return { before: existing, after: shape(after) };
 }
 
 export async function assignRemediation(
@@ -288,6 +304,8 @@ export async function assignRemediation(
   if (!existing) throw new NotFoundError(`Remediation ${id} not found`);
   await assertLinksInTenant(ctx, { ownerId } as RemediationWriteInput);
 
-  const after = await prisma.remediation.update({ where: { id }, data: { ownerId } });
-  return { before: existing, after };
+  const after = await prisma.remediation.update({
+    where: { id }, data: { ownerId }, include: LIST_INCLUDE,
+  });
+  return { before: existing, after: shape(after) };
 }

@@ -290,8 +290,30 @@ describe("every mutation, every caller", () => {
 
         // A create: allowed, but it must land in the outsider's organisation.
         expect(res.status, JSON.stringify(res.body)).toBe(201);
-        expect(res.body.data.organizationId).toBe(ids.otherOrganizationId);
-        expect(res.body.data.organizationId).not.toBe(ids.organizationId);
+
+        /*
+         * Prove ownership by visibility rather than by reading an
+         * organizationId off the response body.
+         *
+         * Not every resource echoes that column back — and the ones that do
+         * are arguably leaking internal plumbing — so asserting on it made
+         * this test depend on a detail it does not care about. Who can see
+         * the record is the property that actually matters, and checking it
+         * this way is both shape-independent and stricter.
+         */
+        const newId = res.body.data.id as number;
+        const collection = c.path(subject);
+
+        const theirs = await request(app).get(`${collection}?pageSize=200`)
+          .set("Authorization", `Bearer ${outsider}`);
+        const ours = await request(app).get(`${collection}?pageSize=200`)
+          .set("Authorization", `Bearer ${admin}`);
+
+        const idsIn = (body: { data?: Array<{ id: number }> }) =>
+          (body.data ?? []).map((row) => row.id);
+
+        expect(idsIn(theirs.body)).toContain(newId);
+        expect(idsIn(ours.body)).not.toContain(newId);
       });
     });
   }
