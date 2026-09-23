@@ -21,7 +21,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:deploy": "prisma migrate deploy",
     "docker:build": "docker build -t drishti-api .",
-    "db:seed:demo": "tsx prisma/seed-demo.ts"
+    "db:seed:demo": "tsx prisma/seed-demo.ts",
+    "db:demo:reset": "tsx prisma/reset-demo.ts"
   },
   "engines": {
     "node": ">=20"
