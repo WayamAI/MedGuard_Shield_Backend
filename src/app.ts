@@ -17,6 +17,7 @@ import { risksRouter } from "./routes/risks.js";
 import { searchRouter } from "./routes/search.js";
 import { threatsRouter } from "./routes/threats.js";
 import { vendorsRouter } from "./routes/vendors.js";
+import { prisma } from "./lib/prisma.js";
 import { requireAuth } from "./middleware/auth.js";
 import { createGlobalLimiter, createLoginLimiter } from "./middleware/security.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
@@ -63,6 +64,32 @@ export function createApp() {
       service: "drishti-api",
       version: process.env.npm_package_version ?? "0.2.0",
     });
+  });
+
+  /**
+   * Readiness, as distinct from liveness. `/health` above answers "is this
+   * process up"; this answers "can it actually serve a request", which means
+   * reaching Postgres. They are kept apart deliberately: a liveness probe that
+   * fails when the database blips gets the container killed for someone else's
+   * outage.
+   *
+   * This is also the URL the hosted demo's keepalive pings. That matters more
+   * than it looks: the free Postgres tier suspends a project that sees no
+   * database traffic, so a ping against the static /health would keep the API
+   * warm while the database went to sleep underneath it. The round trip here
+   * is what keeps both ends awake.
+   */
+  app.get("/health/ready", async (_req, res) => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      res.json({ status: "ready", service: "drishti-api" });
+    } catch {
+      // The reason is deliberately not echoed: this endpoint is public, and a
+      // driver error carries the host and database name. It is logged for the
+      // operator instead.
+      console.error("[drishti] readiness probe failed: database unreachable");
+      res.status(503).json({ status: "degraded", service: "drishti-api" });
+    }
   });
 
   // Public: you cannot present a token before you have one. Login carries its

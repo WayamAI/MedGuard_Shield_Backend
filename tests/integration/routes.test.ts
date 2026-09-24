@@ -57,6 +57,16 @@ describe("authentication is enforced on every /api route", () => {
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe("ROUTE_NOT_FOUND");
   });
+
+  it("readiness is outside the gate too, and reaches the database", async () => {
+    // No Authorization header on purpose. A readiness probe that needs a token
+    // cannot be called by the platform that is deciding whether to route to
+    // this instance, nor by the keepalive that stops the hosted demo's free
+    // tiers from suspending.
+    const res = await request(app).get("/health/ready");
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "ready", service: "drishti-api" });
+  });
 });
 
 describe("GET /api/assets", () => {
