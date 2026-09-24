@@ -46,6 +46,24 @@ export const DEMO_ORG_SLUG = process.env.DEMO_ORG_SLUG ?? "drishti-demo";
 const ORG_SLUG = DEMO_ORG_SLUG;
 const ORG_NAME = process.env.DEMO_ORG_NAME ?? "Drishti Demo Healthcare";
 
+/**
+ * Domain the three demo sign-ins live on.
+ *
+ * The default is `<slug>.invalid` — `.invalid` is reserved by RFC 2606 and can
+ * never resolve, so a seeded account cannot mail a real person even by
+ * accident. That is the right default for a seed that runs on laptops.
+ *
+ * A hosted demo is the case where it is worth overriding: a client being shown
+ * the product reads `admin@drishti-demo.invalid` as a typo or a broken record,
+ * and the credibility cost of that is real. Set DEMO_USER_DOMAIN to a domain
+ * you control and the accounts become ordinary-looking addresses. Nothing is
+ * ever sent to them either way — the API has no outbound mail.
+ */
+const USER_DOMAIN = process.env.DEMO_USER_DOMAIN ?? `${ORG_SLUG}.invalid`;
+
+/** The demo sign-ins, in one place so the summary and the audit actor agree. */
+export const demoEmail = (local: string) => `${local}@${USER_DOMAIN}`;
+
 const day = 24 * 60 * 60 * 1000;
 const daysAgo = (n: number) => new Date(Date.now() - n * day);
 const daysAhead = (n: number) => new Date(Date.now() + n * day);
@@ -449,9 +467,9 @@ export async function seedDemo(options: { quiet?: boolean } = {}): Promise<SeedS
   // ── users and membership ──────────────────────────────────────────────
   const passwordHash = await hashPassword(password);
   const USERS = [
-    { email: `admin@${ORG_SLUG}.invalid`, role: "ADMIN" as const },
-    { email: `analyst@${ORG_SLUG}.invalid`, role: "ANALYST" as const },
-    { email: `viewer@${ORG_SLUG}.invalid`, role: "VIEWER" as const },
+    { email: demoEmail("admin"), role: "ADMIN" as const },
+    { email: demoEmail("analyst"), role: "ANALYST" as const },
+    { email: demoEmail("viewer"), role: "VIEWER" as const },
   ];
 
   const userIds: Record<string, number> = {};
@@ -486,7 +504,7 @@ export async function seedDemo(options: { quiet?: boolean } = {}): Promise<SeedS
   /** Everything below runs as the demo admin, so audit rows name a real user. */
   const ctx: TenantContext = {
     userId: adminId,
-    email: `admin@${ORG_SLUG}.invalid`,
+    email: demoEmail("admin"),
     role: "ADMIN",
     organizationId,
   };
@@ -849,7 +867,7 @@ export async function seedDemo(options: { quiet?: boolean } = {}): Promise<SeedS
     `${totals[5]} risk-history entries, ${totals[6]} audit events.`,
   );
   log(
-    `[demo-seed] sign in as admin@${ORG_SLUG}.invalid / analyst@${ORG_SLUG}.invalid ` +
+    `[demo-seed] sign in as ${demoEmail("admin")} / ${demoEmail("analyst")} ` +
     "with DEMO_USER_PASSWORD. (Password not printed.)",
   );
 

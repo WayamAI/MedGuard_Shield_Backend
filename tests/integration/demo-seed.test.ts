@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
 import { prisma } from "../../src/lib/prisma.js";
 import { resetDatabase } from "../helpers.js";
-import { seedDemo } from "../../prisma/seed-demo.js";
+import { demoEmail, seedDemo } from "../../prisma/seed-demo.js";
 
 /**
  * The demo seed.
@@ -275,7 +275,7 @@ describe("the seeded estate is coherent", () => {
   it("serves the whole estate through the API", async () => {
     const login = await request(app)
       .post("/api/auth/login")
-      .send({ email: "admin@drishti-demo.invalid", password: SEED_PASSWORD });
+      .send({ email: demoEmail("admin"), password: SEED_PASSWORD });
 
     expect(login.status).toBe(200);
     const token = login.body.data.token;
