@@ -1,0 +1,64 @@
+# Drishti API — Render Blueprint.
+#
+# The service definition lives in the repo rather than in dashboard settings so
+# that a redeploy from scratch reproduces the same topology, and so a change to
+# it shows up in review like any other change.
+#
+# Free tier, deliberately, with the cost that comes with it: Render suspends a
+# free web service after roughly 15 minutes without inbound traffic, and the
+# next request pays a 30-60s cold start. See the "Free hosted deployment"
+# section of DEPLOYMENT.md for the keepalive that avoids it.
+
+services:
+  - type: web
+    name: drishti-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    # Virginia, to sit in the same AWS region as the Supabase project
+    # (us-east-1). A cross-country hop would add ~70ms to every query, and the
+    # pages here issue several per render.
+    region: virginia
+
+    # Liveness, not readiness. /health is static and answers "is this process
+    # up"; /health/ready reaches Postgres. Render restarts an instance whose
+    # health check fails, so pointing it at the database-backed probe would let
+    # a transient database blip kill a perfectly healthy container.
+    healthCheckPath: /health
+
+    envVars:
+      # Load-bearing, not cosmetic: cookieOptions() in src/routes/auth.ts only
+      # sets `Secure; SameSite=None` under production, and that is exactly what
+      # lets the session cookie survive the hop between the Vercel-hosted app
+      # and this API on a different domain.
+      - key: NODE_ENV
+        value: production
+
+      # Matches EXPOSE in the Dockerfile. src/server.ts reads process.env.PORT,
+      # so this is the single place the port is decided.
+      - key: PORT
+        value: 4000
+
+      # sync: false means "prompt for this, never store it here". A connection
+      # string, a signing secret and an origin list do not belong in git.
+      #
+      # DATABASE_URL must be the Supabase SESSION pooler on port 5432 -- not the
+      # transaction pooler on 6543, which Prisma migrations cannot use.
+      - key: DATABASE_URL
+        sync: false
+
+      # 32+ random chars. Rotating it invalidates every live access token at
+      # once; refresh tokens are opaque and stored hashed, so they survive.
+      - key: JWT_SECRET
+        sync: false
+
+      # Exact origin(s), comma-separated, no trailing slash. src/app.ts builds
+      # an allowlist from this and never a wildcard, because credentials are
+      # enabled. Vercel preview URLs carry a random hash and will not match.
+      - key: FRONTEND_ORIGIN
+        sync: false
+
+# Migrations are NOT run here, and there is no preDeployCommand. `prisma migrate
+# deploy` belongs in an explicit release step rather than on the path of every
+# deploy -- the Dockerfile's CMD comment gives the reason. DEPLOYMENT.md has the
+# command to run by hand.

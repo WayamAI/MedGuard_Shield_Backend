@@ -175,6 +175,102 @@ every call returns 401, check this first.
 
 ---
 
+## Free hosted deployment (Vercel + Render + Supabase)
+
+The demo topology. Three free tiers, each with one caveat that will cost an
+hour if it is discovered rather than read:
+
+| Piece | Host | Caveat |
+|---|---|---|
+| SPA | Vercel Hobby | `VITE_API_BASE_URL` is inlined at build time; changing it needs a redeploy |
+| This API | Render free web service | suspends after ~15 min idle; next request waits 30-60s |
+| Postgres | Supabase free project | use the **session** pooler; the project pauses after ~7 days of no database traffic |
+
+`render.yaml` in this repo is the service definition. Render reads it as a
+Blueprint, so the topology is reviewable rather than buried in dashboard state.
+
+### Order of operations
+
+Each step produces something the next one needs, so the order is not
+negotiable.
+
+**1. Supabase project.** Take the connection URI from Project Settings >
+Database > Connection string, and take the **session pooler on port 5432** —
+*not* the transaction pooler on 6543, which `prisma migrate` cannot use. On a
+free project the direct (non-pooler) host is IPv6-only, which is the second
+reason the pooler is the right answer rather than a workaround.
+
+**2. Migrate and seed, from a workstation.** Not from the API container — see
+the Dockerfile's `CMD` comment for why a booting container must not migrate.
+Pass `DATABASE_URL` inline so a local `.env` cannot leak into a hosted
+database:
+
+```bash
+DATABASE_URL='<session-pooler-uri>' npx prisma migrate deploy
+DATABASE_URL='<same>' DEMO_USER_PASSWORD='<8+ chars>' npm run db:seed:demo
+```
+
+`db:seed:demo`, never `db:seed` — the latter truncates every table. The safe
+seed creates `admin@drishti-demo.invalid`, `analyst@…` and `viewer@…` with that
+password.
+
+**3. Render service.** New > Blueprint, point it at this repo. Render prompts
+for the three `sync: false` variables:
+
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | the session pooler URI from step 1 |
+| `JWT_SECRET` | `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` |
+| `FRONTEND_ORIGIN` | a placeholder for now; step 5 sets it properly |
+
+**4. Verify the API before touching the frontend.**
+
+```bash
+curl -s https://<service>.onrender.com/health        # process up
+curl -s https://<service>.onrender.com/health/ready  # database reachable
+```
+
+`/health/ready` failing while `/health` passes means the service is up and the
+database is not — almost always a transaction-pooler URL, or a Supabase project
+that has paused.
+
+**5. Deploy the frontend, then close the CORS loop.** Set
+`VITE_API_BASE_URL` to the Render URL in the Vercel project and deploy, then
+set `FRONTEND_ORIGIN` on Render to the exact Vercel production origin and
+redeploy the API.
+
+Skipping the second half is the single most common failure here, and it
+misleads: `POST /api/auth/login` succeeds, so the credentials look fine, and
+then the browser blocks every subsequent call. CORS in `src/app.ts` is an exact
+allowlist and never a wildcard, because `credentials: true` makes `*` invalid
+anyway. Vercel preview URLs carry a random hash and will not match unless you
+list them individually.
+
+### Keeping the free tiers awake
+
+Both free tiers sleep, and they sleep for different reasons, so one ping has to
+satisfy both:
+
+- Render suspends the **service** after ~15 minutes without inbound traffic.
+- Supabase pauses the **project** after ~7 days without database traffic.
+
+A ping against `/health` would wake only the first — it is a static handler and
+never opens a connection, so the database could pause underneath a perfectly
+warm API. `/health/ready` runs `SELECT 1`, which is what keeps both ends alive.
+It sits outside the `/api` auth gate on purpose: a probe that needs a token
+cannot be called by the platform deciding whether to route to the instance.
+
+Render's own health check is pointed at `/health`, not `/health/ready`, and
+deliberately: Render restarts an instance whose check fails, and a database blip
+should not kill a healthy container.
+
+A GitHub Actions schedule hitting `/health/ready` every 10 minutes removes the
+cold start entirely. The tradeoff is real rather than free: an always-awake
+service consumes the free tier's 750 instance-hours a month more or less
+continuously, which covers exactly one service.
+
+---
+
 ## Verified
 
 Against commit `0f63e9e`, on 2026-09-22:
