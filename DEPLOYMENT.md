@@ -175,7 +175,7 @@ every call returns 401, check this first.
 
 ---
 
-## Free hosted deployment (Vercel + Render + Supabase)
+## Free hosted deployment (Vercel + Render + Neon)
 
 The demo topology. Three free tiers, each with one caveat that will cost an
 hour if it is discovered rather than read:
@@ -184,7 +184,7 @@ hour if it is discovered rather than read:
 |---|---|---|
 | SPA | Vercel Hobby | `VITE_API_BASE_URL` is inlined at build time; changing it needs a redeploy |
 | This API | Render free web service | suspends after ~15 min idle; next request waits 30-60s |
-| Postgres | Supabase free project | use the **session** pooler; the project pauses after ~7 days of no database traffic |
+| Postgres | Neon free project | run **migrations against the direct endpoint**, not the pooled one; the compute scales to zero when idle and wakes on the next connection |
 
 ### The shape of it
 
@@ -206,10 +206,10 @@ hour if it is discovered rather than read:
               |  render.yaml, /health probe |   reads PORT from the platform
               +--------------+--------------+
                              |
-                             | Postgres, session pooler :5432
+                             | Postgres over TLS (sslmode=require)
                              v
               +-----------------------------+
-              |  Supabase  ·  Postgres 17   |   us-east-1, to match Virginia
+              |  Neon  ·  Serverless PG     |   us-east-1, to match Virginia
               +-----------------------------+
 ```
 
@@ -217,7 +217,7 @@ Three hosts, three failure modes, and they are worth telling apart before you
 start debugging: Vercel serves a file that was built with whatever
 `VITE_API_BASE_URL` was set at build time, so a wrong API URL is fixed by a
 *rebuild* and never by an env change alone. Render holds the only secrets.
-Supabase is the only stateful piece.
+Neon is the only stateful piece.
 
 ### Environment variables
 
@@ -229,7 +229,7 @@ blueprint prompts rather than records them.
 
 | Variable | Required | Value |
 |---|---|---|
-| `DATABASE_URL` | yes | Supabase **session pooler** URI, port 5432 |
+| `DATABASE_URL` | yes | Neon connection URI, `?sslmode=require`. Pooled endpoint at runtime; see step 1 about migrations |
 | `JWT_SECRET` | yes | 32+ random chars; the server refuses to boot without it |
 | `FRONTEND_ORIGIN` | yes | exact Vercel origin, no trailing slash, comma-separated for several |
 | `NODE_ENV` | yes | `production` — this is what turns on `Secure; SameSite=None` |
@@ -257,11 +257,23 @@ Blueprint, so the topology is reviewable rather than buried in dashboard state.
 Each step produces something the next one needs, so the order is not
 negotiable.
 
-**1. Supabase project.** Take the connection URI from Project Settings >
-Database > Connection string, and take the **session pooler on port 5432** —
-*not* the transaction pooler on 6543, which `prisma migrate` cannot use. On a
-free project the direct (non-pooler) host is IPv6-only, which is the second
-reason the pooler is the right answer rather than a workaround.
+**1. Neon project.** Create the database (name it `drishti`) and take the
+connection URI from the project dashboard. Neon hands out two endpoints for the
+same database and the difference matters:
+
+| Endpoint | Host contains | Use it for |
+|---|---|---|
+| Pooled | `-pooler` | the running API — PgBouncer, many short-lived connections |
+| Direct | no `-pooler` | `prisma migrate deploy` |
+
+Run **migrations against the direct endpoint**. Neon's pooled endpoint is
+PgBouncer in transaction mode, which does not hold the session-level advisory
+lock `prisma migrate` takes to serialise migrations; pointed at the pooler a
+migration can hang or fail in ways that do not name the cause. The running API
+is the opposite case and belongs on the pooler, because serverless Postgres
+charges you for idle connections held open.
+
+Both URIs need `?sslmode=require`. Neon refuses plaintext.
 
 **2. Migrate and seed, from a workstation.** Not from the API container — see
 the Dockerfile's `CMD` comment for why a booting container must not migrate.
@@ -269,22 +281,35 @@ Pass `DATABASE_URL` inline so a local `.env` cannot leak into a hosted
 database:
 
 ```bash
-DATABASE_URL='<session-pooler-uri>' npx prisma migrate deploy
-DATABASE_URL='<same>' DEMO_USER_PASSWORD='<8+ chars>' npm run db:seed:demo
+DATABASE_URL='<neon-direct-uri>' npx prisma migrate deploy
+DATABASE_URL='<neon-direct-uri>' DEMO_USER_PASSWORD='<8+ chars>' npm run db:seed:demo
 ```
 
 `db:seed:demo`, never `db:seed` — the latter truncates every table. The safe
 seed creates `admin@drishti-demo.invalid`, `analyst@…` and `viewer@…` with that
 password.
 
-**3. Render service.** New > Blueprint, point it at this repo. Render prompts
-for the three `sync: false` variables:
+**3. Render service.** New > Blueprint. Render's GitHub App cannot see the
+WayamAI org, so use the **Public Git Repository** field at the bottom of the
+repo picker rather than the connected-repo list:
+
+```
+https://github.com/WayamAI/MedGuard_Shield_Backend
+```
+
+The trade-off is that a repo added this way gets no auto-deploy on push;
+redeploy by hand, or install the Render GitHub App on the org later.
+
+Render then prompts for exactly **one** value:
 
 | Variable | Value |
 |---|---|
-| `DATABASE_URL` | the session pooler URI from step 1 |
-| `JWT_SECRET` | `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` |
-| `FRONTEND_ORIGIN` | a placeholder for now; step 5 sets it properly |
+| `DATABASE_URL` | the Neon **pooled** URI from step 1 — the API runs on the pooler, only migrations use the direct endpoint |
+
+`JWT_SECRET` is `generateValue: true`, so Render mints it and no human ever
+sees it. `FRONTEND_ORIGIN` is committed in `render.yaml` as a plain value,
+because a public origin is not a secret and belongs in review rather than in
+dashboard state.
 
 **4. Verify the API before touching the frontend.**
 
@@ -294,8 +319,8 @@ curl -s https://<service>.onrender.com/health/ready  # database reachable
 ```
 
 `/health/ready` failing while `/health` passes means the service is up and the
-database is not — almost always a transaction-pooler URL, or a Supabase project
-that has paused.
+database is not — almost always a missing `sslmode=require`, or a `DATABASE_URL`
+whose password was truncated when it was pasted.
 
 **5. Deploy the frontend, then close the CORS loop.** Set
 `VITE_API_BASE_URL` to the Render URL in the Vercel project and deploy, then
@@ -314,11 +339,14 @@ list them individually.
 Both free tiers sleep, and they sleep for different reasons, so one ping has to
 satisfy both:
 
-- Render suspends the **service** after ~15 minutes without inbound traffic.
-- Supabase pauses the **project** after ~7 days without database traffic.
+- Render suspends the **service** after ~15 minutes without inbound traffic,
+  and the next request pays a 30-60s cold start.
+- Neon scales the **compute** to zero when idle. That one is far less
+  painful — it wakes on the next connection, not on a human's patience — but it
+  is still a first-query latency the keepalive removes.
 
 A ping against `/health` would wake only the first — it is a static handler and
-never opens a connection, so the database could pause underneath a perfectly
+never opens a connection, so the Neon compute stays asleep behind a perfectly
 warm API. `/health/ready` runs `SELECT 1`, which is what keeps both ends alive.
 It sits outside the `/api` auth gate on purpose: a probe that needs a token
 cannot be called by the platform deciding whether to route to the instance.
