@@ -115,7 +115,7 @@ curl -s localhost:4000/health
 
 ```bash
 createdb medguard_test
-npm test                      # 361 tests; migrates and truncates the TEST database only
+npm test                      # 572 tests; migrates and truncates the TEST database only
 ```
 
 ## Docker
