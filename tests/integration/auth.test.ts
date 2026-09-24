@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
@@ -19,6 +20,22 @@ describe("GET /health", () => {
     const res = await request(app).get("/health");
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ status: "ok", service: "drishti-api" });
+  });
+
+  /**
+   * Regression: the version used to come from process.env.npm_package_version,
+   * which npm sets only for a process it spawned. The container runs
+   * `node dist/server.js` directly, so in production the variable was absent
+   * and /health served a stale hardcoded fallback instead.
+   *
+   * Compared against package.json rather than a literal, so a release bump
+   * does not have to remember this test.
+   */
+  it("reports the version from package.json, not a hardcoded fallback", async () => {
+    const require = createRequire(import.meta.url);
+    const pkg = require("../../package.json") as { version: string };
+    const res = await request(app).get("/health");
+    expect(res.body.version).toBe(pkg.version);
   });
 });
 

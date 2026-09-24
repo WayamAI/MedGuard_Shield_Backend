@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
@@ -18,6 +19,29 @@ import { searchRouter } from "./routes/search.js";
 import { threatsRouter } from "./routes/threats.js";
 import { vendorsRouter } from "./routes/vendors.js";
 import { prisma } from "./lib/prisma.js";
+
+/**
+ * The version /health reports.
+ *
+ * Read from package.json rather than process.env.npm_package_version, which
+ * npm sets only for a process it spawned itself. The container runs
+ * `node dist/server.js` directly, so under Docker -- which is to say in
+ * production -- that variable is absent and the old fallback silently served a
+ * stale hardcoded version. package.json ships in the runtime image beside
+ * dist/, so this resolves in the container and from src/ under tsx alike.
+ *
+ * Defensive on purpose: a liveness probe that throws is worse than one that
+ * cannot name its own version.
+ */
+const VERSION = ((): string => {
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require("../package.json") as { version?: string };
+    return pkg.version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+})();
 import { requireAuth } from "./middleware/auth.js";
 import { createGlobalLimiter, createLoginLimiter } from "./middleware/security.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
@@ -62,7 +86,7 @@ export function createApp() {
     res.json({
       status: "ok",
       service: "drishti-api",
-      version: process.env.npm_package_version ?? "0.2.0",
+      version: VERSION,
     });
   });
 
