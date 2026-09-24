@@ -289,14 +289,27 @@ DATABASE_URL='<neon-direct-uri>' DEMO_USER_PASSWORD='<8+ chars>' npm run db:seed
 seed creates `admin@drishti-demo.invalid`, `analyst@…` and `viewer@…` with that
 password.
 
-**3. Render service.** New > Blueprint, point it at this repo. Render prompts
-for the three `sync: false` variables:
+**3. Render service.** New > Blueprint. Render's GitHub App cannot see the
+WayamAI org, so use the **Public Git Repository** field at the bottom of the
+repo picker rather than the connected-repo list:
+
+```
+https://github.com/WayamAI/MedGuard_Shield_Backend
+```
+
+The trade-off is that a repo added this way gets no auto-deploy on push;
+redeploy by hand, or install the Render GitHub App on the org later.
+
+Render then prompts for exactly **one** value:
 
 | Variable | Value |
 |---|---|
 | `DATABASE_URL` | the Neon **pooled** URI from step 1 — the API runs on the pooler, only migrations use the direct endpoint |
-| `JWT_SECRET` | `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` |
-| `FRONTEND_ORIGIN` | a placeholder for now; step 5 sets it properly |
+
+`JWT_SECRET` is `generateValue: true`, so Render mints it and no human ever
+sees it. `FRONTEND_ORIGIN` is committed in `render.yaml` as a plain value,
+because a public origin is not a secret and belongs in review rather than in
+dashboard state.
 
 **4. Verify the API before touching the frontend.**
 
