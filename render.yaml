@@ -15,7 +15,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
-    # Virginia, to sit in the same AWS region as the Supabase project
+    # Virginia, to sit in the same AWS region as the Neon project
     # (us-east-1). A cross-country hop would add ~70ms to every query, and the
     # pages here issue several per render.
     region: virginia
@@ -42,8 +42,10 @@ services:
       # sync: false means "prompt for this, never store it here". A connection
       # string, a signing secret and an origin list do not belong in git.
       #
-      # DATABASE_URL must be the Supabase SESSION pooler on port 5432 -- not the
-      # transaction pooler on 6543, which Prisma migrations cannot use.
+      # DATABASE_URL is the Neon POOLED endpoint (host contains "-pooler") with
+      # ?sslmode=require. The API wants the pooler; `prisma migrate deploy` must
+      # use the direct endpoint instead -- PgBouncer in transaction mode will not
+      # hold the advisory lock Prisma takes. See DEPLOYMENT.md step 1.
       - key: DATABASE_URL
         sync: false
 
