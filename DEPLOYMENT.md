@@ -175,6 +175,43 @@ every call returns 401, check this first.
 
 ---
 
+## Live production deployment
+
+Deployed and verified end-to-end on 2026-09-25.
+
+| Piece | URL / identifier |
+|---|---|
+| Client app (Vercel) | https://drishti-arka-s-team.vercel.app |
+| API (Render) | https://drishti-api-z92p.onrender.com |
+| Liveness | https://drishti-api-z92p.onrender.com/health |
+| Readiness (touches Postgres) | https://drishti-api-z92p.onrender.com/health/ready |
+| Database | Neon project `neon-bistre-ladder`, us-east-1, database `neondb` |
+
+The Render hostname carries a suffix (`-z92p`) that Render assigns; it is *not*
+derivable from the service name. Always read it from the service page rather
+than assuming `drishti-api.onrender.com`.
+
+Render's GitHub App cannot see the WayamAI org, so this service was created
+from the **public repository URL**. The consequence is that pushes do not
+auto-deploy — redeploy from the Render dashboard, or install the Render GitHub
+App on the org to restore it.
+
+Neon's database is named `neondb`, not `drishti`: the name is chosen by the
+Vercel Marketplace integration that provisioned it, and overriding it would
+desync the connection strings Vercel manages.
+
+### Rollback
+
+Render keeps previous deploys. Roll back from the service's Deploys tab by
+redeploying an earlier commit; no database change is involved, because
+migrations are a separate release step and none of them are destructive.
+
+To roll the frontend back, redeploy a previous Vercel deployment from the
+project's Deployments tab. Remember `VITE_API_BASE_URL` is baked in at build
+time, so a rollback also rolls back the API URL it was built against.
+
+---
+
 ## Free hosted deployment (Vercel + Render + Neon)
 
 The demo topology. Three free tiers, each with one caveat that will cost an
