@@ -327,8 +327,12 @@ Render's own health check is pointed at `/health`, not `/health/ready`, and
 deliberately: Render restarts an instance whose check fails, and a database blip
 should not kill a healthy container.
 
-A GitHub Actions schedule hitting `/health/ready` every 10 minutes removes the
-cold start entirely. The tradeoff is real rather than free: an always-awake
+`.github/workflows/keepalive.yml` does exactly this, every 10 minutes. It reads
+the repository variable `DRISHTI_API_URL` (Settings > Secrets and variables >
+Actions > Variables) and skips rather than fails while that is unset, so it is
+inert until there is something to keep alive. A variable and not a secret: the
+hostname is public, and a secret would be masked in the logs precisely when
+reading them matters. The tradeoff is real rather than free: an always-awake
 service consumes the free tier's 750 instance-hours a month more or less
 continuously, which covers exactly one service.
 
