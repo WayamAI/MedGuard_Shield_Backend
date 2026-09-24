@@ -1,0 +1,71 @@
+name: Keepalive
+
+# Both free tiers sleep, for different reasons, and one ping has to satisfy
+# both: Render suspends the service after ~15 minutes idle, Supabase pauses the
+# project after ~7 days without database traffic.
+#
+# The target is /health/ready, not /health. /health is a static handler that
+# never opens a connection, so pinging it would keep the API warm while the
+# database paused underneath it. /health/ready runs SELECT 1, which touches
+# both ends. It sits outside the /api auth gate on purpose.
+#
+# Cost, stated plainly: an always-awake service consumes Render's free 750
+# instance-hours a month more or less continuously, which covers exactly one
+# service. Disable this workflow if that budget is needed elsewhere.
+
+on:
+  schedule:
+    # Every 10 minutes. GitHub does not guarantee punctuality on shared
+    # runners and may delay a scheduled run under load; the Render idle
+    # window is ~15 minutes, so the margin absorbs the usual drift.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+# A queued run is worthless once a newer one exists -- the point is recency,
+# not a complete history of pings.
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    name: ping /health/ready
+    runs-on: ubuntu-latest
+    steps:
+      # Configured as a repository *variable*, not a secret: it is a public
+      # hostname, and a secret would be masked in the logs exactly when
+      # reading them matters. Settings > Secrets and variables > Actions >
+      # Variables > New repository variable > DRISHTI_API_URL
+      #
+      # Unset is treated as "not deployed yet" and skips rather than fails,
+      # so this workflow is inert until there is something to keep alive.
+      - name: Ping
+        env:
+          API_URL: ${{ vars.DRISHTI_API_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${API_URL}" ]; then
+            echo "DRISHTI_API_URL is not set -- nothing deployed to keep alive. Skipping."
+            exit 0
+          fi
+
+          url="${API_URL%/}/health/ready"
+          echo "Pinging ${url}"
+
+          # A cold Render instance takes 30-60s to wake, and waking it is the
+          # entire point, so the timeout has to outlast a cold start rather
+          # than give up and report the service down.
+          code=$(curl -sS -o /tmp/body.txt -w '%{http_code}' --max-time 90 --retry 2 --retry-delay 15 "${url}" || echo "000")
+
+          echo "HTTP ${code}"
+          cat /tmp/body.txt || true
+          echo
+
+          if [ "${code}" != "200" ]; then
+            echo "::error::Readiness probe returned ${code}. The API is up but its database is not, or the service failed to wake."
+            exit 1
+          fi

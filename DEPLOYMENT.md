@@ -115,7 +115,7 @@ curl -s localhost:4000/health
 
 ```bash
 createdb medguard_test
-npm test                      # 361 tests; migrates and truncates the TEST database only
+npm test                      # 572 tests; migrates and truncates the TEST database only
 ```
 
 ## Docker
@@ -185,6 +185,69 @@ hour if it is discovered rather than read:
 | SPA | Vercel Hobby | `VITE_API_BASE_URL` is inlined at build time; changing it needs a redeploy |
 | This API | Render free web service | suspends after ~15 min idle; next request waits 30-60s |
 | Postgres | Supabase free project | use the **session** pooler; the project pauses after ~7 days of no database traffic |
+
+### The shape of it
+
+```
+                      client browser
+                            |
+                            | HTTPS
+                            v
+              +-----------------------------+
+              |  Vercel  ·  Drishti web     |   static SPA, built by Vite
+              |  medguard_shield            |   VITE_API_BASE_URL inlined at build
+              +--------------+--------------+
+                             |
+                             | HTTPS + credentialed CORS
+                             | (cookie: Secure; SameSite=None)
+                             v
+              +-----------------------------+
+              |  Render  ·  Drishti API     |   Docker, Express, non-root
+              |  render.yaml, /health probe |   reads PORT from the platform
+              +--------------+--------------+
+                             |
+                             | Postgres, session pooler :5432
+                             v
+              +-----------------------------+
+              |  Supabase  ·  Postgres 17   |   us-east-1, to match Virginia
+              +-----------------------------+
+```
+
+Three hosts, three failure modes, and they are worth telling apart before you
+start debugging: Vercel serves a file that was built with whatever
+`VITE_API_BASE_URL` was set at build time, so a wrong API URL is fixed by a
+*rebuild* and never by an env change alone. Render holds the only secrets.
+Supabase is the only stateful piece.
+
+### Environment variables
+
+Nothing here belongs in git. Both hosts store these in their own encrypted
+settings; `render.yaml` marks the secret ones `sync: false` precisely so the
+blueprint prompts rather than records them.
+
+**Render (API)**
+
+| Variable | Required | Value |
+|---|---|---|
+| `DATABASE_URL` | yes | Supabase **session pooler** URI, port 5432 |
+| `JWT_SECRET` | yes | 32+ random chars; the server refuses to boot without it |
+| `FRONTEND_ORIGIN` | yes | exact Vercel origin, no trailing slash, comma-separated for several |
+| `NODE_ENV` | yes | `production` — this is what turns on `Secure; SameSite=None` |
+| `PORT` | set by `render.yaml` | `4000`; the server reads whatever the platform injects |
+
+`DEMO_ORG_SLUG`, `DEMO_ORG_NAME`, `DEMO_USER_DOMAIN` and `DEMO_USER_PASSWORD`
+are read only by the seed scripts, which run from a workstation. The API
+process never reads them, so they do not belong on the service.
+
+**Vercel (web)**
+
+| Variable | Required | Value |
+|---|---|---|
+| `VITE_API_BASE_URL` | yes | the Render origin, e.g. `https://<service>.onrender.com` |
+
+Build-time, not runtime. `src/lib/apiClient.ts` throws if it is unset rather
+than silently falling back to localhost, so a misconfigured build fails loudly
+in the browser instead of looking like a backend outage.
 
 `render.yaml` in this repo is the service definition. Render reads it as a
 Blueprint, so the topology is reviewable rather than buried in dashboard state.
@@ -264,8 +327,12 @@ Render's own health check is pointed at `/health`, not `/health/ready`, and
 deliberately: Render restarts an instance whose check fails, and a database blip
 should not kill a healthy container.
 
-A GitHub Actions schedule hitting `/health/ready` every 10 minutes removes the
-cold start entirely. The tradeoff is real rather than free: an always-awake
+`.github/workflows/keepalive.yml` does exactly this, every 10 minutes. It reads
+the repository variable `DRISHTI_API_URL` (Settings > Secrets and variables >
+Actions > Variables) and skips rather than fails while that is unset, so it is
+inert until there is something to keep alive. A variable and not a secret: the
+hostname is public, and a secret would be masked in the logs precisely when
+reading them matters. The tradeoff is real rather than free: an always-awake
 service consumes the free tier's 750 instance-hours a month more or less
 continuously, which covers exactly one service.
 
@@ -273,19 +340,49 @@ continuously, which covers exactly one service.
 
 ## Verified
 
-Against commit `0f63e9e`, on 2026-09-22:
+Against `deploy/production-launch`, on 2026-09-24:
 
 | Check | Result |
 |---|---|
 | `npm run build` | pass |
 | `npm run typecheck` (src + tests) | pass |
 | `npm run lint` | pass |
-| `npm test` | 361/361 pass |
+| `npx prisma validate` | pass |
+| `npm test` | 572/572 pass |
 | `docker build` | pass |
+| Container honours an injected `PORT` | pass — booted on `PORT=10000`, not the `EXPOSE`d 4000 |
 | Container serves `/health` | pass |
-| Container serves authenticated API against real data | pass |
+| Container serves `/health/ready` against real Postgres | pass — `{"status":"ready"}` |
 | Docker healthcheck | reports `healthy` |
+| `/health` reports the real version | pass — see the regression note below |
 
-Not verified, and not claimed: a real staging or production deploy, TLS
-termination, horizontal scaling, and managed backup/restore. No such
-environment was available from this session.
+The container checks were run against a throwaway `postgres:17-alpine` on a
+private Docker network, which is the closest local analogue to how Render runs
+the image: an unprivileged process, no `.env` file, every value injected.
+
+### A note on test flakiness
+
+`npm test` is not perfectly deterministic. Across three clean full runs on
+2026-09-24 it produced 571/571, 570/571 and 572/572 — the single failure was
+`import.test.ts`, whose login helper received an empty response body. The same
+class of failure has been seen before in `permissions.test.ts`.
+
+What is known:
+
+- It does not reproduce in isolation. `import.test.ts` (56 tests) and
+  `permissions.test.ts` (123 tests) both pass every time when run alone.
+- It is not cross-file database contention by parallelism: `vitest.config.ts`
+  sets `fileParallelism: false`, so files already run one at a time.
+- It is not the rate limiter leaking between files. `createLoginLimiter()` is
+  a per-`createApp()` factory, so each file gets its own budget.
+- It is a failure to *obtain* a session in a test helper, not an authorization
+  decision going the wrong way. No test has ever observed a denied caller being
+  allowed through.
+
+What is not known: the actual trigger. It is recorded here rather than papered
+over, and no test or authorization rule has been weakened to make the suite
+green. Treat a red run as "re-run and check whether the same test failed",
+not as a release gate on its own.
+
+Not verified, and not claimed: horizontal scaling, managed backup/restore, and
+load behaviour under concurrent users.
