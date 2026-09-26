@@ -364,12 +364,57 @@ async function insertRows(
   }
 }
 
-export type ImportResult = ImportReport & { imported: number };
+/**
+ * Assets whose derived risk factors an import of these rows could have moved.
+ *
+ * A CSV is the one way several of the graph's edges enter the system, and
+ * three of the seven entities feed `deriveAssetExposure` directly:
+ *
+ *   data-flows     the source asset's unencrypted outbound flow count
+ *   access-grants  the target asset's live and elevated grant counts
+ *   threats        the asset's open HIGH/CRITICAL threat count
+ *
+ * Returning them rather than recalculating here is deliberate. `runImport`
+ * commits inside a transaction, and the risk engine's standalone path uses the
+ * global client — so recomputing before the commit would read the pre-import
+ * graph through a different connection and confidently persist a stale score.
+ * The caller recalculates after the transaction returns.
+ *
+ * The other four entities move nothing: `assets` and `vendors` arrive with no
+ * edges and no assessment, `phi-types` are a vocabulary, and `risks` writes
+ * its own Risk and RiskHistory rows with a score it computes itself.
+ */
+export function assetsAffectedBy(spec: EntitySpec, rows: Record<string, unknown>[]): number[] {
+  const field =
+    spec.slug === "data-flows" ? "sourceAssetId"
+    : spec.slug === "access-grants" || spec.slug === "threats" ? "assetId"
+    : null;
+  if (!field) return [];
+
+  const ids = new Set<number>();
+  for (const row of rows) {
+    const id = row[field];
+    if (typeof id === "number" && Number.isInteger(id)) ids.add(id);
+  }
+  return [...ids];
+}
+
+export type ImportResult = ImportReport & {
+  imported: number;
+  /**
+   * Assets the caller must recalculate once the transaction has committed.
+   * Empty for entities that cannot move a derived factor.
+   */
+  affectedAssetIds: number[];
+};
 
 /**
  * Real import. Validates and commits inside one transaction, so a file either
  * lands whole or not at all — including the re-check, which runs against the
  * transaction's own view rather than a snapshot taken beforehand.
+ *
+ * Risk recalculation is *not* done here; see `assetsAffectedBy`. This returns
+ * the subjects and the route drives the recompute after commit.
  */
 export async function runImport(
   ctx: TenantContext,
@@ -378,9 +423,9 @@ export async function runImport(
 ): Promise<ImportResult> {
   return prisma.$transaction(async (tx) => {
     const { report, insertable } = await analyse(tx as unknown as Db, ctx, spec, text);
-    if (!report.valid) return { ...report, imported: 0 };
+    if (!report.valid) return { ...report, imported: 0, affectedAssetIds: [] };
 
     const imported = await insertRows(tx as unknown as Db, ctx, spec, insertable);
-    return { ...report, imported };
+    return { ...report, imported, affectedAssetIds: assetsAffectedBy(spec, insertable) };
   });
 }

@@ -154,6 +154,32 @@ export async function onVendorAccessChanged(
  * A control's status or effectiveness changed, which moves the control-gap
  * factor of every asset it is applied to.
  */
+/**
+ * PHI flows were added or changed.
+ *
+ * Only the *source* asset of a flow can move: exposure counts
+ * `unencryptedOutboundFlows`, which riskEngine reads as this asset's outbound
+ * flows where `encrypted: false`. The target asset receives records but its
+ * own outbound count is untouched, so it is not passed here.
+ *
+ * Callers may pass the source of every imported flow rather than filtering to
+ * the unencrypted ones. That is deliberate: `recalculate` suppresses no-op
+ * changes, so an encrypted flow's source simply does not move and writes no
+ * history, and the caller does not have to reproduce the engine's rule about
+ * which flows count. Being over-inclusive here is cheap and cannot be wrong;
+ * being under-inclusive would silently leave a stale score.
+ *
+ * `PHI_CHANGED` is the reason, which until now was the one RiskChangeReason
+ * the code declared and never used.
+ */
+export async function onDataFlowsChanged(
+  ctx: TenantContext,
+  sourceAssetIds: number[],
+  req?: Request,
+): Promise<TriggerResult> {
+  return onAssetsChanged(ctx, sourceAssetIds, "PHI_CHANGED", req);
+}
+
 export async function onControlChanged(
   ctx: TenantContext,
   controlId: number,

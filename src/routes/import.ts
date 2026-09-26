@@ -1,6 +1,7 @@
 import { Router, type RequestHandler } from "express";
 import multer from "multer";
 import { ctxOf, requirePermission } from "../middleware/auth.js";
+import { onDataFlowsChanged } from "../services/riskTriggers.js";
 import { recordAudit } from "../services/auditService.js";
 import { BadRequestError, HttpError, NotFoundError } from "../lib/errors.js";
 import { templateCsv } from "../services/importParsing.js";
@@ -176,17 +177,59 @@ importRouter.post("/:entity", canImport, uploadCsv, async (req, res, next) => {
       return;
     }
 
+    /*
+     * Recalculate the assets the import could have moved, now that the
+     * transaction has committed.
+     *
+     * A CSV is the only way flows enter the system, and unencrypted outbound
+     * flows, live access grants and open severe threats all feed
+     * `deriveAssetExposure`. Until this existed, importing any of the three
+     * left every affected score stale until something *else* happened to
+     * touch the asset — so a freshly imported estate reported risk that its
+     * own data already contradicted.
+     *
+     * Deliberately after the commit rather than inside `runImport`: the risk
+     * engine's standalone path uses the global Prisma client, so recomputing
+     * within the transaction would read the pre-import graph through a
+     * different connection and persist a stale score with full confidence.
+     *
+     * Failure here must not fail the import. The rows are committed and the
+     * import genuinely succeeded; a recompute that throws is recorded and the
+     * response still reports what landed. The next mutation touching those
+     * assets will recompute them anyway.
+     */
+    let recalculated = 0;
+    if (result.affectedAssetIds.length > 0) {
+      try {
+        const { changed } = await onDataFlowsChanged(ctx, result.affectedAssetIds, req);
+        recalculated = changed.length;
+      } catch (recomputeError) {
+        await recordAudit(ctx, {
+          action: "IMPORT_COMPLETED",
+          entityType: "Import",
+          result: "FAILURE",
+          metadata: {
+            entity: spec.slug, filename,
+            note: "rows imported; risk recalculation failed",
+            reason: recomputeError instanceof Error ? recomputeError.message : "unknown",
+          },
+          req,
+        }).catch(() => undefined);
+      }
+    }
+
     await recordAudit(ctx, {
       action: "IMPORT_COMPLETED",
       entityType: "Import",
       metadata: {
         entity: spec.slug, filename,
         totalRows: result.totalRows, imported: result.imported,
+        assetsRecalculated: recalculated,
       },
       req,
     });
 
-    res.status(201).json({ data: result });
+    res.status(201).json({ data: { ...result, assetsRecalculated: recalculated } });
   } catch (err) {
     // A thrown import (bad file, oversized upload, database error) is still a
     // failed import and is recorded as one before the error propagates.
