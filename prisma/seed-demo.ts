@@ -426,6 +426,17 @@ export async function seedDemo(options: { quiet?: boolean } = {}): Promise<SeedS
     if (!options.quiet) console.log(...args);
   };
 
+  // Demo accounts use a shared, low-entropy password by design (it's read off
+  // a slide during a walkthrough). That is only acceptable in a demo/dev
+  // database, so refuse outright in production rather than trust the caller
+  // to remember not to run this there.
+  if (process.env.NODE_ENV === "production" && process.env.DEMO_SEED_ALLOW_PRODUCTION !== "yes") {
+    throw new Error(
+      "Refusing to seed demo users with NODE_ENV=production. " +
+      "Set DEMO_SEED_ALLOW_PRODUCTION=yes if that is genuinely what you want.",
+    );
+  }
+
   const password = process.env.DEMO_USER_PASSWORD;
   if (!password) {
     throw new Error(

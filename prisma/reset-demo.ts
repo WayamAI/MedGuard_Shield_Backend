@@ -1,4 +1,7 @@
 import "dotenv/config";
+import { execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { prisma } from "../src/lib/prisma.js";
 import { DEMO_ORG_SLUG, seedDemo, type SeedSummary } from "./seed-demo.js";
 import type { Prisma } from "../src/generated/prisma/client.js";
@@ -160,6 +163,31 @@ export async function resetDemo(options: { quiet?: boolean } = {}): Promise<Rese
       "Refusing to reset a demo organisation with NODE_ENV=production. " +
       "Set DEMO_RESET_ALLOW_PRODUCTION=yes if that is genuinely what you want.",
     );
+  }
+
+  // Refuse to run against a database whose name does not look like a demo
+  // database, so a misconfigured DATABASE_URL (e.g. pointed at dev/prod) can't
+  // delete real rows. Override with DEMO_RESET_ALLOW_ANY_DB=yes for a
+  // genuinely different naming scheme.
+  const dbUrl = process.env.DATABASE_URL ?? "";
+  const dbName = dbUrl.split("/").pop()?.split("?")[0] ?? "";
+  if (!dbName.toLowerCase().includes("demo") && process.env.DEMO_RESET_ALLOW_ANY_DB !== "yes") {
+    throw new Error(
+      `Refusing to reset: database "${dbName}" does not look like a demo database ` +
+      '(its name does not contain "demo"). Set DEMO_RESET_ALLOW_ANY_DB=yes to override.',
+    );
+  }
+
+  // Non-negotiable: back up before any destructive statement runs, so a
+  // scoping bug or a bad DATABASE_URL never loses data unrecoverably.
+  if (process.env.DEMO_RESET_SKIP_BACKUP !== "yes") {
+    const backupDir = join(process.cwd(), "prisma", "backups");
+    mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = join(backupDir, `pre-reset_${dbName}_${stamp}.sql`);
+    log(`[demo-reset] backing up "${dbName}" to ${backupPath} before any deletion...`);
+    execFileSync("pg_dump", [dbUrl, "-f", backupPath], { stdio: "inherit" });
+    log(`[demo-reset] backup complete: ${backupPath}`);
   }
 
   const org = await prisma.organization.findUnique({ where: { slug: DEMO_ORG_SLUG } });
