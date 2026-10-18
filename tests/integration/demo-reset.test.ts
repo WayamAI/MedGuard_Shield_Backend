@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
 import { prisma } from "../../src/lib/prisma.js";
 import { resetDatabase } from "../helpers.js";
-import { seedDemo, DEMO_ORG_SLUG } from "../../prisma/seed-demo.js";
+import { demoEmail, seedDemo, DEMO_ORG_SLUG } from "../../prisma/seed-demo.js";
 import { resetDemo } from "../../prisma/reset-demo.js";
 
 /**
@@ -385,7 +385,7 @@ describe("the reset demo environment is presentation-ready", () => {
   it("serves real data on every endpoint a demonstration uses", async () => {
     const login = await request(app)
       .post("/api/auth/login")
-      .send({ email: `admin@${DEMO_ORG_SLUG}.invalid`, password: SEED_PASSWORD });
+      .send({ email: demoEmail("admin"), password: SEED_PASSWORD });
     expect(login.status).toBe(200);
     const token = login.body.data.token;
 
