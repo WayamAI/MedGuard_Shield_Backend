@@ -1,8 +1,8 @@
 import { prisma } from "../lib/prisma.js";
 import { scope, type TenantContext } from "../lib/tenant.js";
-import { accessSummary } from "./accessService.js";
+import { accessSummary, listAccessGrants } from "./accessService.js";
 import { remediationSummary } from "./remediationService.js";
-import { threatSummary } from "./threatService.js";
+import { listThreats, threatSummary } from "./threatService.js";
 import { riskDistribution } from "./riskService.js";
 
 /**
@@ -117,5 +117,39 @@ export async function riskAssessmentSummary(ctx: TenantContext) {
      */
     disclaimer:
       "Counts are computed from records held in Drishti at generation time. Coverage percentages describe how much of the recorded estate has been assessed or controlled; they are not a compliance score and do not assert conformance with any framework.",
+  };
+}
+
+/**
+ * Everything `riskAssessmentSummary` reports, plus the row-level detail the
+ * PDF/CSV renderers need: which vendors lack a valid BAA, which access grants
+ * are flagged, which threats are still open, and the control register with
+ * its HIPAA citations. Kept separate from the summary so the JSON endpoint
+ * (used by dashboards that only want totals) doesn't pay for rows it never
+ * renders.
+ */
+export async function riskAssessmentDetail(ctx: TenantContext) {
+  const [summary, vendorsWithoutBaa, flaggedAccess, openThreats, controls] = await Promise.all([
+    riskAssessmentSummary(ctx),
+    prisma.vendor.findMany({
+      where: { ...scope(ctx), archivedAt: null, baaStatus: { in: ["MISSING", "EXPIRED"] } },
+      select: { id: true, name: true, baaStatus: true, phiVolume: true },
+      orderBy: { name: "asc" },
+    }),
+    listAccessGrants(ctx, { flaggedOnly: true }),
+    listThreats(ctx, { openOnly: true }),
+    prisma.control.findMany({
+      where: { ...scope(ctx), archivedAt: null },
+      select: { name: true, category: true, status: true, effectiveness: true, frameworkRef: true },
+      orderBy: [{ category: "asc" }, { name: "asc" }],
+    }),
+  ]);
+
+  return {
+    ...summary,
+    vendorsWithoutBaa,
+    flaggedAccess: flaggedAccess.items,
+    openThreats: openThreats.items,
+    controlRegister: controls,
   };
 }

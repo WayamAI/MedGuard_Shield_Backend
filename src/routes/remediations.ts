@@ -10,6 +10,7 @@ import {
   remediationSummary, transitionRemediation, updateRemediation,
 } from "../services/remediationService.js";
 import { entityHistory } from "../services/auditQueryService.js";
+import { maybeSendCsv } from "../lib/csv.js";
 
 export const remediationsRouter = Router();
 
@@ -17,9 +18,9 @@ const SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
 const STATUSES = ["OPEN", "IN_PROGRESS", "RESOLVED", "ACCEPTED", "REOPENED"] as const;
 const SOURCES = ["RISK", "THREAT", "ACCESS", "VENDOR", "CONTROL", "MANUAL"] as const;
 
-const idParam = z.object({ id: z.coerce.number().int().positive() });
+export const idParam = z.object({ id: z.coerce.number().int().positive() });
 
-const listQuery = paginationQuery.extend({
+export const listQuery = paginationQuery.extend({
   status: z.enum(STATUSES).optional(),
   severity: z.enum(SEVERITIES).optional(),
   source: z.enum(SOURCES).optional(),
@@ -31,7 +32,7 @@ const listQuery = paginationQuery.extend({
   search: z.string().trim().min(1).max(120).optional(),
 });
 
-const createBody = z.object({
+export const createBody = z.object({
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().min(1).max(4000),
   recommendation: z.string().trim().min(1).max(4000),
@@ -47,20 +48,37 @@ const createBody = z.object({
   accessGrantId: z.coerce.number().int().positive().nullable().optional(),
 });
 
-const patchBody = createBody.partial().refine(
+export const patchBody = createBody.partial().refine(
   (v) => Object.keys(v).length > 0,
   { message: "Provide at least one field to update" },
 );
 
-const transitionBody = z.object({ status: z.enum(STATUSES) });
-const assignBody = z.object({ ownerId: z.coerce.number().int().positive().nullable() });
+export const transitionBody = z.object({ status: z.enum(STATUSES) });
+export const assignBody = z.object({ ownerId: z.coerce.number().int().positive().nullable() });
 
 
 remediationsRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
+    const ctx = ctxOf(req);
     const q = listQuery.parse(req.query);
+    if (req.query.format === "csv") {
+      const { items } = await listRemediations(ctx, q, {});
+      await recordAudit(ctx, { action: "DATA_EXPORTED", entityType: "Remediation", metadata: { count: items.length }, req });
+      maybeSendCsv(req, res, "remediations.csv", items, [
+        { header: "ID", value: (r) => r.id },
+        { header: "Title", value: (r) => r.title },
+        { header: "Severity", value: (r) => r.severity },
+        { header: "Status", value: (r) => r.status },
+        { header: "Source", value: (r) => r.source },
+        { header: "Owner", value: (r) => r.owner ?? "" },
+        { header: "Due At", value: (r) => r.dueAt?.toISOString?.() ?? "" },
+        { header: "Overdue", value: (r) => r.overdue },
+        { header: "Resolved At", value: (r) => r.resolvedAt?.toISOString?.() ?? "" },
+      ]);
+      return;
+    }
     const page = pageParams(q);
-    const { items, total } = await listRemediations(ctxOf(req), q, page);
+    const { items, total } = await listRemediations(ctx, q, page);
     paged(res, items, pageMeta(page, total));
   } catch (err) {
     next(err);

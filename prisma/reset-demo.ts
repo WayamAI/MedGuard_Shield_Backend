@@ -68,6 +68,12 @@ type Step = { table: string; run: (tx: Prisma.TransactionClient, organizationId:
  * `onDelete: Restrict`, so flows must go before PHI types.
  */
 const STEPS: Step[] = [
+  // AuditEvent is append-only everywhere else (a DB trigger enforces it — see
+  // the add_audit_immutability and allow_demo_audit_delete migrations), but
+  // this one ordinary deleteMany still succeeds: the trigger function itself
+  // carries the one exception, permitting DELETE only when the row's own
+  // organization has a "demo" slug. Nothing in this file disables a trigger
+  // or touches SQL directly, which is itself a tested invariant below.
   { table: "auditEvent", run: (tx, o) => tx.auditEvent.deleteMany({ where: { organizationId: o } }) },
   { table: "riskHistory", run: (tx, o) => tx.riskHistory.deleteMany({ where: { organizationId: o } }) },
   { table: "remediation", run: (tx, o) => tx.remediation.deleteMany({ where: { organizationId: o } }) },
@@ -186,7 +192,12 @@ export async function resetDemo(options: { quiet?: boolean } = {}): Promise<Rese
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const backupPath = join(backupDir, `pre-reset_${dbName}_${stamp}.sql`);
     log(`[demo-reset] backing up "${dbName}" to ${backupPath} before any deletion...`);
-    execFileSync("pg_dump", [dbUrl, "-f", backupPath], { stdio: "inherit" });
+    // pg_dump's connection URI only understands standard libpq parameters --
+    // Prisma's "?schema=" suffix on DATABASE_URL isn't one of them and makes
+    // pg_dump reject the whole URL. Not needed here anyway: pg_dump dumps
+    // every schema in the target database by default.
+    const pgDumpUrl = dbUrl.split("?")[0];
+    execFileSync("pg_dump", [pgDumpUrl, "-f", backupPath], { stdio: "inherit" });
     log(`[demo-reset] backup complete: ${backupPath}`);
   }
 

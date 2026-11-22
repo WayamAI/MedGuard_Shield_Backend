@@ -79,7 +79,12 @@ describe("POST /api/auth/login", () => {
       .send({ email: "admin@test.local", password: "wrong" });
 
     expect(unknown.status).toBe(wrongPassword.status);
-    expect(unknown.body).toEqual(wrongPassword.body);
+    // requestId is unique per request by design (see middleware/logging.ts)
+    // and carries no information about which branch produced the error, so
+    // it's excluded from the enumeration-safety comparison.
+    const { requestId: _unknownId, ...unknownError } = unknown.body.error;
+    const { requestId: _wrongId, ...wrongPasswordError } = wrongPassword.body.error;
+    expect(unknownError).toEqual(wrongPasswordError);
   });
 
   it("rejects a malformed body with 400 and names the bad fields", async () => {

@@ -12,25 +12,26 @@ import {
 import { assessVendor, listRiskHistory, recomputeVendorRisk } from "../services/riskEngine.js";
 import { entityHistory } from "../services/auditQueryService.js";
 import { onVendorAccessChanged, onVendorChanged, vendorFieldsAffectRisk } from "../services/riskTriggers.js";
+import { maybeSendCsv } from "../lib/csv.js";
 
 export const vendorsRouter = Router();
 
-const idParam = z.object({ id: z.coerce.number().int().positive() });
+export const idParam = z.object({ id: z.coerce.number().int().positive() });
 const BAA_STATUSES = ["SIGNED", "PENDING", "EXPIRED", "MISSING"] as const;
 
-const createBody = z.object({
+export const createBody = z.object({
   name: z.string().trim().min(1, "Name is required").max(120),
   baaStatus: z.enum(BAA_STATUSES).optional(),
   phiVolume: z.number().int().min(0).optional(),
   lastAssessedAt: z.coerce.date().nullable().optional(),
 });
 
-const patchBody = createBody.partial().refine(
+export const patchBody = createBody.partial().refine(
   (v) => Object.keys(v).length > 0,
   { message: "Provide at least one field to update" },
 );
 
-const listQuery = paginationQuery.extend({
+export const listQuery = paginationQuery.extend({
   search: z.string().trim().min(1).max(120).optional(),
   baaStatus: z.enum(BAA_STATUSES).optional(),
   includeArchived: z.coerce.boolean().optional(),
@@ -46,7 +47,7 @@ const listQuery = paginationQuery.extend({
  * derived from recorded facts when omitted -- supplying either pins it against
  * automatic recalculation, which is how an assessor overrides the derivation.
  */
-const assessmentBody = z.object({
+export const assessmentBody = z.object({
   likelihood: z.number().int().min(1).max(5),
   impact: z.number().int().min(1).max(5),
   exposure: z.number().int().min(1).max(5).optional(),
@@ -56,9 +57,27 @@ const assessmentBody = z.object({
 
 vendorsRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
+    const ctx = ctxOf(req);
     const q = listQuery.parse(req.query);
+    if (req.query.format === "csv") {
+      const { items } = await listVendors(ctx, q, {});
+      await recordAudit(ctx, { action: "DATA_EXPORTED", entityType: "Vendor", metadata: { count: items.length }, req });
+      maybeSendCsv(req, res, "vendors.csv", items, [
+        { header: "ID", value: (v) => v.id },
+        { header: "Name", value: (v) => v.name },
+        { header: "BAA Status", value: (v) => v.baaStatus },
+        { header: "PHI Volume", value: (v) => v.phiVolume },
+        { header: "Assessment Overdue", value: (v) => v.assessmentOverdue },
+        { header: "Risk Score", value: (v) => v.risk?.score ?? "" },
+        { header: "Risk Band", value: (v) => v.risk?.band ?? "" },
+        { header: "Asset Count", value: (v) => v.assetCount },
+        { header: "Open Remediations", value: (v) => v.openRemediations },
+        { header: "Archived", value: (v) => (v.archivedAt ? "yes" : "no") },
+      ]);
+      return;
+    }
     const page = pageParams(q);
-    const { items, total } = await listVendors(ctxOf(req), q, page);
+    const { items, total } = await listVendors(ctx, q, page);
     paged(res, items, pageMeta(page, total));
   } catch (err) {
     next(err);
@@ -182,7 +201,7 @@ vendorsRouter.post(
   },
 );
 
-const assetLinkParams = z.object({
+export const assetLinkParams = z.object({
   id: z.coerce.number().int().positive(),
   assetId: z.coerce.number().int().positive(),
 });

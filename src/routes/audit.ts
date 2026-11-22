@@ -2,29 +2,23 @@ import { Router } from "express";
 import { z } from "zod";
 import { validate } from "../middleware/validate.js";
 import { ctxOf, requirePermission } from "../middleware/auth.js";
-import { paged } from "../lib/http.js";
+import { ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
-import { listAuditEvents } from "../services/auditQueryService.js";
+import { listAuditEvents, verifyAuditChain } from "../services/auditQueryService.js";
+import { recordAudit } from "../services/auditService.js";
+import { maybeSendCsv } from "../lib/csv.js";
+import { AuditAction } from "../generated/prisma/client.js";
 
 export const auditRouter = Router();
 
-const ACTIONS = [
-  "LOGIN", "LOGIN_FAILED", "LOGOUT", "TOKEN_REFRESHED", "TOKEN_REVOKED",
-  "ASSET_CREATED", "ASSET_UPDATED", "ASSET_ARCHIVED", "ASSET_RESTORED",
-  "RISK_CREATED", "RISK_UPDATED", "RISK_RECOMPUTED",
-  "VENDOR_CREATED", "VENDOR_UPDATED", "VENDOR_ARCHIVED", "VENDOR_RESTORED",
-  "IDENTITY_CREATED", "IDENTITY_UPDATED", "IDENTITY_ARCHIVED",
-  "ACCESS_GRANTED", "ACCESS_UPDATED", "ACCESS_REVOKED", "ACCESS_REVIEWED",
-  "THREAT_CREATED", "THREAT_UPDATED", "THREAT_STATUS_CHANGED",
-  "CONTROL_CREATED", "CONTROL_UPDATED", "CONTROL_ARCHIVED",
-  "CONTROL_LINKED_ASSET", "CONTROL_UNLINKED_ASSET",
-  "POLICY_CREATED", "POLICY_UPDATED", "POLICY_ARCHIVED",
-  "REMEDIATION_CREATED", "REMEDIATION_UPDATED", "REMEDIATION_ASSIGNED",
-  "REMEDIATION_RESOLVED", "REMEDIATION_REOPENED",
-  "IMPORT_STARTED", "IMPORT_COMPLETED", "IMPORT_FAILED",
-] as const;
+/**
+ * Every value `AuditAction` has, read off the generated Prisma enum rather
+ * than hand-copied — the whole reason this list went stale twice before
+ * (new actions kept landing in schema.prisma without this file noticing).
+ */
+const ACTIONS = Object.values(AuditAction) as [AuditAction, ...AuditAction[]];
 
-const listQuery = paginationQuery.extend({
+export const listQuery = paginationQuery.extend({
   action: z.enum(ACTIONS).optional(),
   entityType: z.string().trim().max(50).optional(),
   entityId: z.coerce.number().int().positive().optional(),
@@ -47,12 +41,37 @@ auditRouter.get(
   validate({ query: listQuery }),
   async (req, res, next) => {
     try {
+      const ctx = ctxOf(req);
       const q = listQuery.parse(req.query);
+      if (req.query.format === "csv") {
+        const { items } = await listAuditEvents(ctx, q, {});
+        await recordAudit(ctx, { action: "DATA_EXPORTED", entityType: "AuditEvent", metadata: { count: items.length }, req });
+        maybeSendCsv(req, res, "audit-log.csv", items, [
+          { header: "ID", value: (e) => e.id },
+          { header: "Timestamp", value: (e) => e.createdAt?.toISOString?.() ?? e.createdAt },
+          { header: "Actor", value: (e) => e.actor?.email ?? "" },
+          { header: "Action", value: (e) => e.action },
+          { header: "Entity Type", value: (e) => e.entityType ?? "" },
+          { header: "Entity ID", value: (e) => e.entityId ?? "" },
+          { header: "Result", value: (e) => e.result },
+          { header: "IP", value: (e) => e.ip ?? "" },
+        ]);
+        return;
+      }
       const page = pageParams(q);
-      const { items, total } = await listAuditEvents(ctxOf(req), q, page);
+      const { items, total } = await listAuditEvents(ctx, q, page);
       paged(res, items, pageMeta(page, total));
     } catch (err) {
       next(err);
     }
   },
 );
+
+/** Walks the hash chain and reports whether it's intact, and where it first breaks if not. */
+auditRouter.get("/verify", requirePermission("audit:read"), async (req, res, next) => {
+  try {
+    ok(res, await verifyAuditChain(ctxOf(req)));
+  } catch (err) {
+    next(err);
+  }
+});

@@ -230,6 +230,28 @@ enum AuditAction {
   IMPORT_STARTED
   IMPORT_COMPLETED
   IMPORT_FAILED
+  REPORT_GENERATED
+  PHI_TYPE_CREATED
+  PHI_TYPE_UPDATED
+  MEMBER_INVITED
+  MEMBER_INVITE_RESENT
+  MEMBER_INVITE_REVOKED
+  MEMBER_INVITE_ACCEPTED
+  MEMBER_ROLE_CHANGED
+  MEMBER_DEACTIVATED
+  MEMBER_REACTIVATED
+  PASSWORD_CHANGED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
+  MFA_ENROLLED
+  MFA_DISABLED
+  MFA_CHALLENGE_FAILED
+  SESSION_REVOKED
+  SETTINGS_UPDATED
+  SYSTEM_SWEEP_COMPLETED
+  DATA_EXPORTED
+  API_KEY_CREATED
+  API_KEY_REVOKED
 }
 
 enum AuditResult {
@@ -263,8 +285,86 @@ model Organization {
   policies     Policy[]
   remediations Remediation[]
   auditEvents  AuditEvent[]
+  memberInvites MemberInvite[]
+  settings      OrganizationSettings?
+  notifications Notification[]
+  apiKeys       ApiKey[]
 
   @@index([slug])
+}
+
+enum NotificationType {
+  THREAT_NEW_HIGH_SEVERITY
+  REMEDIATION_OVERDUE
+  VENDOR_BAA_INVALID
+  VENDOR_ASSESSMENT_OVERDUE
+  POLICY_REVIEW_OVERDUE
+  ACCESS_GRANT_FLAGGED
+}
+
+/// One row per event, visible to every ADMIN of the organisation (these are
+/// estate-health findings, not personal messages). `readByUserIds` tracks
+/// per-user read state without a join table, the same pattern as
+/// `User.mfaRecoveryCodeHashes`.
+///
+/// A natural key (`dedupeKey`) prevents the daily sweep from creating a
+/// second notification for a condition that is still true the next day —
+/// re-running the sweep is a no-op for anything already notified and still
+/// unresolved.
+model Notification {
+  id             Int              @id @default(autoincrement())
+  organizationId Int
+  type           NotificationType
+  title          String
+  body           String
+  entityType     String
+  entityId       Int
+  dedupeKey      String
+  readByUserIds  Int[]            @default([])
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, dedupeKey])
+  @@index([organizationId, createdAt])
+}
+
+/// A scoped credential for the ingestion API, standing in for a real
+/// connector until one exists. The secret is shown once, at creation, and
+/// never again — only its SHA-256 hash is stored, the same pattern as a
+/// refresh token.
+model ApiKey {
+  id             Int       @id @default(autoincrement())
+  organizationId Int
+  name           String
+  /// Fixed to "import" today; a field rather than a hardcoded check so a
+  /// second scope can be added later without a new model.
+  scope          String    @default("import")
+  keyHash        String    @unique
+  createdById    Int
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+/// Thresholds that used to be hardcoded constants in the services that read
+/// them (`STALE_AFTER_DAYS`, `ASSESSMENT_INTERVAL_DAYS`). Each is read live
+/// at request time by the function that used to hardcode it, so changing a
+/// setting takes effect on the next read — there is nothing cached to
+/// recompute.
+model OrganizationSettings {
+  organizationId         Int      @id
+  accessStaleAfterDays   Int      @default(90)
+  assessmentCadenceDays  Int      @default(365)
+  mfaRequired            Boolean  @default(false)
+  updatedAt              DateTime @default(now()) @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
 
 /// Membership of a user in an organisation, with the role that applies there.
@@ -277,6 +377,10 @@ model OrganizationMember {
   userId         Int
   organizationId Int
   role           Role     @default(VIEWER)
+  /// Deactivated by an admin: the user keeps the account but can no longer
+  /// sign into this organisation. Distinct from Identity.active, which
+  /// governs PHI access grants, not Drishti sign-in.
+  active         Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @default(now()) @updatedAt
 
@@ -286,6 +390,44 @@ model OrganizationMember {
   @@unique([userId, organizationId])
   @@index([organizationId])
   @@index([userId])
+}
+
+/// An admin's invitation for someone to join an organisation. The token is
+/// stored hashed, like a refresh token, so a database read cannot be replayed
+/// as an accept-invite link.
+model MemberInvite {
+  id             Int       @id @default(autoincrement())
+  organizationId Int
+  email          String
+  role           Role
+  tokenHash      String    @unique
+  invitedById    Int
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InvitesSent", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([expiresAt])
+}
+
+/// A single-use, short-lived password reset token, stored hashed. One
+/// unconsumed token per user at a time — requesting a new one supersedes the
+/// last (see passwordResetService.ts), rather than letting them pile up.
+model PasswordResetToken {
+  id         Int       @id @default(autoincrement())
+  userId     Int
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 // ---------------------------------------------------------------- models
@@ -302,14 +444,23 @@ model User {
   passwordHash   String?
   externalAuthId String?  @unique
   role           Role     @default(VIEWER)
+  /// TOTP secret (base32), set only once MFA enrollment is confirmed.
+  mfaSecret      String?
+  mfaEnabled     Boolean  @default(false)
+  /// Recovery codes, each hashed (SHA-256) and removed from the array the
+  /// moment it is spent — single-use by construction, not by a flag to check.
+  mfaRecoveryCodeHashes String[] @default([])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @default(now()) @updatedAt
 
-  memberships   OrganizationMember[]
-  refreshTokens RefreshToken[]
-  auditEvents   AuditEvent[]
-  riskChanges   RiskHistory[]
-  ownedWork     Remediation[]        @relation("RemediationOwner")
+  memberships         OrganizationMember[]
+  refreshTokens       RefreshToken[]
+  auditEvents         AuditEvent[]
+  riskChanges         RiskHistory[]
+  ownedWork           Remediation[]        @relation("RemediationOwner")
+  invitesSent         MemberInvite[]       @relation("InvitesSent")
+  passwordResetTokens PasswordResetToken[]
+  apiKeysCreated      ApiKey[]
 
   @@index([role])
 }
@@ -841,6 +992,17 @@ model AuditEvent {
   ip             String?
   userAgent      String?
   createdAt      DateTime    @default(now())
+
+  /// Hash-chain tamper evidence, per organisation: `hash` is SHA-256 of
+  /// `prevHash` (the previous row's `hash` for this org, or "" for the first)
+  /// concatenated with this row's own canonical content. Altering any past
+  /// row breaks every hash computed after it — `GET /api/audit/verify`
+  /// walks the chain and reports the first break. A DB trigger (see the
+  /// migration that added these columns) additionally makes UPDATE/DELETE on
+  /// this table fail outright, so the chain is a second, independent check
+  /// rather than the only one.
+  prevHash String?
+  hash     String?
 
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   actor        User?         @relation(fields: [actorUserId], references: [id], onDelete: SetNull)

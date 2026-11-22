@@ -25,6 +25,15 @@ services:
       timeout: 5s
       retries: 10
 
+  # Dev/test mail sink. The API's SMTP_HOST/SMTP_PORT point here instead of a
+  # real provider, so invite/reset emails are inspectable (UI on :8025,
+  # HTTP API for tests) without actually sending anything.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+
   api:
     build:
       context: .
@@ -34,12 +43,16 @@ services:
         # Waits for the healthcheck above, not merely for the container to
         # exist, so the API does not start against a database still booting.
         condition: service_healthy
+      mailpit:
+        condition: service_started
     environment:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: postgresql://${POSTGRES_USER:-drishti}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-drishti_dev}?schema=public
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (32+ random chars)}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:8080}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
     ports:
       - "${API_PORT:-4000}:4000"
     healthcheck:

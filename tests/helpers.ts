@@ -184,6 +184,8 @@ export async function seedFixture() {
     billingId: billing.id,
     phiTypeId: clinical.id,
     adminUserId: users[0]!.id,
+    analystUserId: users[1]!.id,
+    viewerUserId: users[2]!.id,
     outsiderUserId: outsider.id,
     rivalAssetId: rivalAsset.id,
     rivalVendorId: rivalVendor.id,
@@ -234,4 +236,32 @@ export async function sessionFor(agent: LoginAgent, email: string) {
     expiresIn: number;
     user: { id: number; email: string; role: string; organizationId: number };
   };
+}
+
+const MAILPIT_URL = process.env.MAILPIT_URL ?? "http://127.0.0.1:8025";
+
+/** Clears Mailpit's inbox so a test can assert on exactly what it sent. */
+export async function clearMailpit(): Promise<void> {
+  await fetch(`${MAILPIT_URL}/api/v1/messages`, { method: "DELETE" });
+}
+
+/** The most recent message sent to `to`, read back via Mailpit's HTTP API. */
+export async function latestMailTo(to: string): Promise<{ subject: string; text: string }> {
+  const list = (await (await fetch(`${MAILPIT_URL}/api/v1/messages`)).json()) as {
+    messages: Array<{ ID: string; To: Array<{ Address: string }> }>;
+  };
+  const match = list.messages.find((m) => m.To.some((r) => r.Address.toLowerCase() === to.toLowerCase()));
+  if (!match) throw new Error(`No mail found for ${to} in Mailpit`);
+  const full = (await (await fetch(`${MAILPIT_URL}/api/v1/message/${match.ID}`)).json()) as {
+    Subject: string;
+    Text: string;
+  };
+  return { subject: full.Subject, text: full.Text };
+}
+
+/** Pulls the `?token=` query value out of a mail body — every invite/reset link carries one. */
+export function tokenFromMail(text: string): string {
+  const match = text.match(/token=([A-Za-z0-9_-]+)/);
+  if (!match) throw new Error(`No token found in mail body: ${text}`);
+  return match[1];
 }

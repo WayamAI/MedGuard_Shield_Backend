@@ -10,14 +10,15 @@ import {
 } from "../services/threatService.js";
 import { entityHistory } from "../services/auditQueryService.js";
 import { onAssetChanged } from "../services/riskTriggers.js";
+import { maybeSendCsv } from "../lib/csv.js";
 
 export const threatsRouter = Router();
 
 const SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const;
 const STATUSES = ["OPEN", "INVESTIGATING", "RESOLVED", "FALSE_POSITIVE"] as const;
-const idParam = z.object({ id: z.coerce.number().int().positive() });
+export const idParam = z.object({ id: z.coerce.number().int().positive() });
 
-const listQuery = paginationQuery.extend({
+export const listQuery = paginationQuery.extend({
   status: z.enum(STATUSES).optional(),
   severity: z.enum(SEVERITIES).optional(),
   assetId: z.coerce.number().int().positive().optional(),
@@ -25,7 +26,7 @@ const listQuery = paginationQuery.extend({
   search: z.string().trim().min(1).max(120).optional(),
 });
 
-const createBody = z.object({
+export const createBody = z.object({
   assetId: z.coerce.number().int().positive(),
   severity: z.enum(SEVERITIES),
   title: z.string().trim().min(1).max(200),
@@ -34,7 +35,7 @@ const createBody = z.object({
   detectedAt: z.coerce.date().optional(),
 });
 
-const patchBody = z
+export const patchBody = z
   .object({
     severity: z.enum(SEVERITIES).optional(),
     title: z.string().trim().min(1).max(200).optional(),
@@ -44,14 +45,29 @@ const patchBody = z
     message: "Provide at least one field to update",
   });
 
-const transitionBody = z.object({ status: z.enum(STATUSES) });
+export const transitionBody = z.object({ status: z.enum(STATUSES) });
 
 
 threatsRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
+    const ctx = ctxOf(req);
     const q = listQuery.parse(req.query);
+    if (req.query.format === "csv") {
+      const { items } = await listThreats(ctx, q, {});
+      await recordAudit(ctx, { action: "DATA_EXPORTED", entityType: "Threat", metadata: { count: items.length }, req });
+      maybeSendCsv(req, res, "threats.csv", items, [
+        { header: "ID", value: (t) => t.id },
+        { header: "Title", value: (t) => t.title },
+        { header: "Severity", value: (t) => t.severity },
+        { header: "Status", value: (t) => t.status },
+        { header: "Asset", value: (t) => t.assetName },
+        { header: "Detected At", value: (t) => t.detectedAt?.toISOString?.() ?? "" },
+        { header: "Resolved At", value: (t) => t.resolvedAt?.toISOString?.() ?? "" },
+      ]);
+      return;
+    }
     const page = pageParams(q);
-    const { items, total } = await listThreats(ctxOf(req), q, page);
+    const { items, total } = await listThreats(ctx, q, page);
     paged(res, items, pageMeta(page, total));
   } catch (err) {
     next(err);

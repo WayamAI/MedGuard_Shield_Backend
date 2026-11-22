@@ -9,7 +9,7 @@ export const searchRouter = Router();
 
 const TYPES = ["asset", "vendor", "identity", "threat", "remediation", "control", "policy"] as const;
 
-const searchQuery = z.object({
+export const searchQuery = z.object({
   q: z.string().trim().min(MIN_QUERY_LENGTH, `Query must be at least ${MIN_QUERY_LENGTH} characters`).max(120),
   /** Comma-separated subset, e.g. `types=asset,vendor`. */
   types: z.string().trim().optional(),

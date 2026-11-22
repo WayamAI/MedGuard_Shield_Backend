@@ -3,8 +3,17 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import type { Role } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
+import { env } from "../config.js";
 import { HttpError } from "../lib/errors.js";
 import type { TenantContext } from "../lib/tenant.js";
+import { requiresMfa, verifyMfaChallenge } from "./mfaService.js";
+
+/** Thrown by `login` when the account has MFA enabled and no code (or a bad one) was given. */
+export class MfaRequiredError extends HttpError {
+  constructor(message = "MFA verification code required") {
+    super(401, message, "MFA_REQUIRED");
+  }
+}
 
 /**
  * Local email + password auth, issuing a short-lived access JWT alongside a
@@ -53,13 +62,7 @@ export { UnauthorizedError, ForbiddenError };
  * silently defaults is a signing key an attacker already knows.
  */
 function signingSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret.length < 16) {
-    throw new Error(
-      "JWT_SECRET is missing or too short (need 16+ chars) — see .env.example",
-    );
-  }
-  return secret;
+  return env.JWT_SECRET;
 }
 
 export async function hashPassword(plaintext: string): Promise<string> {
@@ -74,7 +77,7 @@ export async function hashPassword(plaintext: string): Promise<string> {
  * human secret — there is nothing for a slow hash to defend against, and the
  * refresh path would pay bcrypt's cost on every call.
  */
-function hashRefreshToken(token: string): string {
+export function hashRefreshToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -123,7 +126,7 @@ async function issueRefreshToken(
 
 async function membershipsFor(userId: number): Promise<SessionMembership[]> {
   const rows = await prisma.organizationMember.findMany({
-    where: { userId },
+    where: { userId, active: true },
     include: { organization: { select: { name: true, slug: true } } },
     orderBy: { organizationId: "asc" },
   });
@@ -147,7 +150,7 @@ async function membershipsFor(userId: number): Promise<SessionMembership[]> {
 export async function login(
   email: string,
   password: string,
-  options: { organizationId?: number; userAgent?: string | null; ip?: string | null } = {},
+  options: { organizationId?: number; userAgent?: string | null; ip?: string | null; mfaCode?: string } = {},
 ): Promise<SessionResult> {
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
@@ -158,6 +161,13 @@ export async function login(
 
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) throw invalid;
+
+  if (await requiresMfa(user.id)) {
+    if (!options.mfaCode) throw new MfaRequiredError();
+    if (!(await verifyMfaChallenge(user.id, options.mfaCode))) {
+      throw new MfaRequiredError("Invalid MFA verification code");
+    }
+  }
 
   const memberships = await membershipsFor(user.id);
   if (memberships.length === 0) {
@@ -280,6 +290,38 @@ export async function revokeRefreshToken(presentedToken: string): Promise<boolea
 export async function revokeAllRefreshTokens(userId: number): Promise<number> {
   const result = await prisma.refreshToken.updateMany({
     where: { userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  return result.count;
+}
+
+/**
+ * Active sessions, one row per live (unexpired, unrevoked) refresh token.
+ * Each rotation on `/auth/refresh` creates a new row and revokes the one it
+ * replaced, so this is naturally "one row per device/browser still signed
+ * in" without a separate session table.
+ */
+export async function listSessions(userId: number) {
+  return prisma.refreshToken.findMany({
+    where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+    select: { id: true, createdAt: true, expiresAt: true, userAgent: true, ip: true },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+/** Revokes one session by its row id, scoped to the caller so a user can't revoke someone else's. */
+export async function revokeSessionById(userId: number, sessionId: number): Promise<boolean> {
+  const result = await prisma.refreshToken.updateMany({
+    where: { id: sessionId, userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  return result.count > 0;
+}
+
+/** Revokes every session except the one presenting `keepTokenHash`. */
+export async function revokeOtherSessions(userId: number, keepTokenHash: string): Promise<number> {
+  const result = await prisma.refreshToken.updateMany({
+    where: { userId, revokedAt: null, tokenHash: { not: keepTokenHash } },
     data: { revokedAt: new Date() },
   });
   return result.count;

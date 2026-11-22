@@ -56,3 +56,17 @@ export function createLoginLimiter(): RateLimitRequestHandler {
     handler: limitResponse,
   });
 }
+
+/**
+ * The ingestion API has no human in the loop to notice it misbehaving, so it
+ * gets its own, tighter ceiling than ordinary browser traffic.
+ */
+export function createIngestLimiter(): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: isTest ? 1000 : 60,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    handler: limitResponse,
+  });
+}

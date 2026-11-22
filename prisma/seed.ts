@@ -106,6 +106,10 @@ const USERS: Array<{ email: string; role: "ADMIN" | "ANALYST" | "VIEWER" }> = [
   { email: "admin@meridian.org", role: "ADMIN" },
   { email: "f.alrashid@meridian.org", role: "ANALYST" },
   { email: "a.patel@meridian.org", role: "VIEWER" },
+  // wayam.ai-branded aliases for the same three roles, same org, same password.
+  { email: "admin@wayam.ai", role: "ADMIN" },
+  { email: "analyst@wayam.ai", role: "ANALYST" },
+  { email: "viewer@wayam.ai", role: "VIEWER" },
 ];
 
 /**

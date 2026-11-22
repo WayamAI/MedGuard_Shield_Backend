@@ -5,7 +5,11 @@ import { HttpError } from "../lib/errors.js";
 /** Anything that did not match a router. Registered after all routes. */
 export const notFoundHandler: RequestHandler = (req, res) => {
   res.status(404).json({
-    error: { code: "ROUTE_NOT_FOUND", message: `No route for ${req.method} ${req.path}` },
+    error: {
+      code: "ROUTE_NOT_FOUND",
+      message: `No route for ${req.method} ${req.path}`,
+      requestId: req.id as string | number | undefined,
+    },
   });
 };
 
@@ -58,20 +62,23 @@ function withoutRawBody(err: unknown): unknown {
   return { ...rest, body: "[redacted]", message: asError.message, stack: asError.stack };
 }
 
-export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
+  const requestId = req.id as string | number | undefined;
+
   if (err instanceof ZodError) {
     res.status(400).json({
       error: {
         code: "VALIDATION_ERROR",
         message: "Request validation failed",
         details: err.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+        requestId,
       },
     });
     return;
   }
 
   if (err instanceof HttpError) {
-    res.status(err.status).json({ error: { code: err.code, message: err.message } });
+    res.status(err.status).json({ error: { code: err.code, message: err.message, requestId } });
     return;
   }
 
@@ -88,17 +95,19 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
       `[drishti] rejected unreadable request body: ${(err as BodyParserError).type} -> ${parseFailure.status}`,
     );
     res.status(parseFailure.status).json({
-      error: { code: parseFailure.code, message: parseFailure.message },
+      error: { code: parseFailure.code, message: parseFailure.message, requestId },
     });
     return;
   }
 
   // Prisma's "record required but not found" — semantically a 404, not a 500.
   if (typeof err === "object" && err !== null && (err as { code?: string }).code === "P2025") {
-    res.status(404).json({ error: { code: "NOT_FOUND", message: "Record not found" } });
+    res.status(404).json({ error: { code: "NOT_FOUND", message: "Record not found", requestId } });
     return;
   }
 
   console.error("[drishti] unhandled error:", withoutRawBody(err));
-  res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Internal server error" } });
+  res.status(500).json({
+    error: { code: "INTERNAL_ERROR", message: "Internal server error", requestId },
+  });
 };

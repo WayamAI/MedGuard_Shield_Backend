@@ -390,29 +390,12 @@ async function ensureAudit(
     entityType: input.entityType,
     entityId: input.entityId,
     metadata: input.metadata,
+    // Backdated at insert time -- the table is append-only now (see
+    // add_audit_immutability), so there is no second UPDATE step available
+    // to do this afterward. Set here instead, so the seeded trail still
+    // reads as history rather than a burst of activity at seed time.
+    createdAt: input.createdAt,
   });
-
-  // recordAudit stamps createdAt with now(). Backdating historical entries is
-  // a separate update so the trail reads as a history rather than as a burst
-  // of activity at seed time.
-  if (input.createdAt) {
-    const row = await prisma.auditEvent.findFirst({
-      where: {
-        organizationId: ctx.organizationId,
-        action: input.action,
-        entityType: input.entityType,
-        entityId: input.entityId,
-      },
-      orderBy: { id: "desc" },
-      select: { id: true },
-    });
-    if (row) {
-      await prisma.auditEvent.update({
-        where: { id: row.id },
-        data: { createdAt: input.createdAt },
-      });
-    }
-  }
 
   bump(created, "auditEvents");
   return true;

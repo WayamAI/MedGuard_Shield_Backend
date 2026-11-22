@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 /**
  * Integration tests hit real Express routes against a real Postgres, so they
@@ -27,6 +27,11 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
+    // demo-reset.test.ts needs a database whose name contains "demo" (it
+    // exercises the audit trigger's DELETE exception and reset-demo.ts's own
+    // "demo" guard) — see vitest.demo-reset.config.ts, run separately by
+    // `npm test` so the two never share one DATABASE_URL.
+    exclude: [...configDefaults.exclude, "tests/integration/demo-reset.test.ts"],
     globalSetup: ["tests/setup/globalSetup.ts"],
     // Integration tests share one database; parallel files would race on the
     // same rows, so run them one file at a time.

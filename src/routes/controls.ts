@@ -8,6 +8,7 @@ import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
 import { controlFieldsAffectRisk, onAssetChanged, onControlChanged } from "../services/riskTriggers.js";
+import { maybeSendCsv } from "../lib/csv.js";
 import {
   archiveControl, createControl, getControlById, listControls, setAssetControl, updateControl,
 } from "../services/controlService.js";
@@ -18,9 +19,9 @@ const CATEGORIES = ["ACCESS", "ENCRYPTION", "MONITORING", "GOVERNANCE", "RESILIE
 const STATUSES = ["IMPLEMENTED", "PARTIAL", "PLANNED", "NOT_IMPLEMENTED"] as const;
 const EFFECTIVENESS = ["EFFECTIVE", "PARTIALLY_EFFECTIVE", "INEFFECTIVE", "NOT_ASSESSED"] as const;
 
-const idParam = z.object({ id: z.coerce.number().int().positive() });
+export const idParam = z.object({ id: z.coerce.number().int().positive() });
 
-const listQuery = paginationQuery.extend({
+export const listQuery = paginationQuery.extend({
   search: z.string().trim().min(1).max(120).optional(),
   category: z.enum(CATEGORIES).optional(),
   status: z.enum(STATUSES).optional(),
@@ -28,7 +29,7 @@ const listQuery = paginationQuery.extend({
   includeArchived: z.coerce.boolean().optional(),
 });
 
-const createBody = z.object({
+export const createBody = z.object({
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().min(1).max(2000),
   category: z.enum(CATEGORIES),
@@ -43,7 +44,7 @@ const createBody = z.object({
   lastReviewedAt: z.coerce.date().nullable().optional(),
 });
 
-const patchBody = createBody.partial().refine(
+export const patchBody = createBody.partial().refine(
   (v) => Object.keys(v).length > 0,
   { message: "Provide at least one field to update" },
 );
@@ -91,9 +92,25 @@ const canPatchControl: RequestHandler = (req, _res, next) => {
 
 controlsRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
+    const ctx = ctxOf(req);
     const q = listQuery.parse(req.query);
+    if (req.query.format === "csv") {
+      const { items } = await listControls(ctx, q, {});
+      await recordAudit(ctx, { action: "DATA_EXPORTED", entityType: "Control", metadata: { count: items.length }, req });
+      maybeSendCsv(req, res, "controls.csv", items, [
+        { header: "ID", value: (c) => c.id },
+        { header: "Name", value: (c) => c.name },
+        { header: "Category", value: (c) => c.category },
+        { header: "Status", value: (c) => c.status },
+        { header: "Effectiveness", value: (c) => c.effectiveness },
+        { header: "Owner", value: (c) => c.owner ?? "" },
+        { header: "Framework Ref", value: (c) => c.frameworkRef ?? "" },
+        { header: "Applied Assets", value: (c) => c.appliedAssetCount },
+      ]);
+      return;
+    }
     const page = pageParams(q);
-    const { items, total } = await listControls(ctxOf(req), q, page);
+    const { items, total } = await listControls(ctx, q, page);
     paged(res, items, pageMeta(page, total));
   } catch (err) {
     next(err);
@@ -165,7 +182,7 @@ controlsRouter.post("/:id/archive", requirePermission("control:archive"), valida
   }
 });
 
-const linkParams = z.object({
+export const linkParams = z.object({
   id: z.coerce.number().int().positive(),
   assetId: z.coerce.number().int().positive(),
 });

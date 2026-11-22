@@ -2,6 +2,7 @@ import type { Prisma, ThreatSeverity, ThreatStatus } from "../generated/prisma/c
 import { prisma } from "../lib/prisma.js";
 import { ConflictError, NotFoundError } from "../lib/errors.js";
 import { scope, type TenantContext } from "../lib/tenant.js";
+import { notifyNewHighSeverityThreat } from "./notificationService.js";
 
 /**
  * The detection feed, now with a real triage lifecycle. Every status change
@@ -182,9 +183,12 @@ export async function createThreat(ctx: TenantContext, input: ThreatWriteInput) 
     );
   }
 
-  return prisma.threat.create({
+  const threat = await prisma.threat.create({
     data: { ...input, organizationId: ctx.organizationId },
   });
+
+  await notifyNewHighSeverityThreat(ctx.organizationId, threat);
+  return threat;
 }
 
 export async function updateThreat(
