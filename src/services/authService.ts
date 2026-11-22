@@ -65,8 +65,11 @@ function signingSecret(): string {
   return env.JWT_SECRET;
 }
 
+/** OWASP Password Storage Cheat Sheet: bcrypt work factor >= 10, 12 as a safer modern baseline. */
+const BCRYPT_COST = 12;
+
 export async function hashPassword(plaintext: string): Promise<string> {
-  return bcrypt.hash(plaintext, 10);
+  return bcrypt.hash(plaintext, BCRYPT_COST);
 }
 
 /**
@@ -98,8 +101,18 @@ export type SessionResult = {
   memberships: SessionMembership[];
 };
 
+/** Pinned explicitly on both sign and verify, so neither "none" nor an attacker-chosen asymmetric algorithm is ever accepted. */
+const JWT_ALGORITHM = "HS256";
+const JWT_ISSUER = "drishti-api";
+const JWT_AUDIENCE = "drishti-client";
+
 function signAccessToken(user: AuthUser): string {
-  return jwt.sign(user, signingSecret(), { expiresIn: ACCESS_TOKEN_TTL_SECONDS });
+  return jwt.sign(user, signingSecret(), {
+    algorithm: JWT_ALGORITHM,
+    expiresIn: ACCESS_TOKEN_TTL_SECONDS,
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
 }
 
 /** Issues and persists a refresh token for one user/organisation pair. */
@@ -330,7 +343,11 @@ export async function revokeOtherSessions(userId: number, keepTokenHash: string)
 /** Decodes and validates an access token. Throws 401 on anything suspect. */
 export function verifyToken(token: string): AuthUser {
   try {
-    const payload = jwt.verify(token, signingSecret());
+    const payload = jwt.verify(token, signingSecret(), {
+      algorithms: [JWT_ALGORITHM],
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+    });
     if (typeof payload === "string") throw new Error("unexpected string payload");
 
     const { id, email, role, organizationId } = payload as Partial<AuthUser>;

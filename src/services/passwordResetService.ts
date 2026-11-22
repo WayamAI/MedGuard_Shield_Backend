@@ -43,10 +43,13 @@ export async function resetPassword(token: string, newPassword: string): Promise
   }
 
   const passwordHash = await hashPassword(newPassword);
-  await prisma.$transaction([
-    prisma.user.update({ where: { id: record.userId }, data: { passwordHash } }),
-    prisma.passwordResetToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
-  ]);
+  // The interactive form (sequential awaits on one connection), not the
+  // batch-array form -- the latter is where the "client.query() already
+  // executing" deprecation warning traced back to under test.
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id: record.userId }, data: { passwordHash } });
+    await tx.passwordResetToken.update({ where: { id: record.id }, data: { usedAt: new Date() } });
+  });
 
   return { userId: record.userId };
 }

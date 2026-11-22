@@ -341,3 +341,34 @@ describe("naturalKeyOf", () => {
       .toBe(naturalKeyOf(threats, { assetName: "BILLING", title: "leak" }));
   });
 });
+
+describe("parseCsv — rejects values shaped like a patient identifier", () => {
+  const header = "assetName,severity,status,title,description,detectedAt,resolvedAt";
+
+  it("rejects a Social Security number in a free-text field", () => {
+    const row = `Billing Engine DB,HIGH,OPEN,Found a record,"Patient SSN 123-45-6789 exposed",,`;
+    const { errors } = parseCsv(threats, `${header}\n${row}\n`);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toContain("Social Security number");
+  });
+
+  it("rejects a labelled medical record number", () => {
+    const row = `Billing Engine DB,HIGH,OPEN,Found a record,"Linked to MRN: 4471829",,`;
+    const { errors } = parseCsv(threats, `${header}\n${row}\n`);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toContain("medical record number");
+  });
+
+  it("rejects a labelled date of birth", () => {
+    const row = `Billing Engine DB,HIGH,OPEN,Found a record,"Patient DOB: 04/12/1985 was exposed",,`;
+    const { errors } = parseCsv(threats, `${header}\n${row}\n`);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toContain("date of birth");
+  });
+
+  it("does not flag ordinary metadata text, including the entity spec's own example", () => {
+    const row = `Billing Engine DB,HIGH,OPEN,Found a record,"847 patient records exported to an unmanaged endpoint.",,`;
+    const { errors } = parseCsv(threats, `${header}\n${row}\n`);
+    expect(errors).toHaveLength(0);
+  });
+});

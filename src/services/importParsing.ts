@@ -52,6 +52,29 @@ function looksLikeFormula(value: string): boolean {
 }
 
 /**
+ * Patterns shaped like a real patient identifier -- not a PHI *category*
+ * (which this product only ever imports metadata about), but something
+ * that looks like it names an actual person's record. Checked on every
+ * free-text column, since nothing in the entity specs has a legitimate
+ * reason to contain one: a Social Security number, a labelled medical
+ * record number, or a labelled date of birth. Matches invariant #2 (never
+ * stores patient records) at the one layer closest to the attacker's
+ * actual input.
+ */
+const PATIENT_IDENTIFIER_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /\b\d{3}-\d{2}-\d{4}\b/, label: "a Social Security number" },
+  { pattern: /\bMRN[:\s#-]*\d{4,}\b/i, label: "a medical record number" },
+  { pattern: /\bDOB[:\s-]*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/i, label: "a date of birth" },
+];
+
+function looksLikePatientIdentifier(value: string): string | null {
+  for (const { pattern, label } of PATIENT_IDENTIFIER_PATTERNS) {
+    if (pattern.test(value)) return label;
+  }
+  return null;
+}
+
+/**
  * Escapes a value on the way *out* into a CSV we generate. Prefixing with a
  * single quote is what makes Excel treat the cell as text. Used by the
  * template endpoint so our own sample files cannot be the attack either.
@@ -146,6 +169,16 @@ function coerce(
         `${col.column} starts with "${value[0]}", which spreadsheets treat as a formula. ` +
         "Remove the leading character.",
     };
+  }
+
+  if (col.type === "string") {
+    const identifierLabel = looksLikePatientIdentifier(value);
+    if (identifierLabel) {
+      return {
+        ok: false,
+        message: `${col.column} looks like it contains ${identifierLabel}. Drishti stores PHI metadata only, never patient records.`,
+      };
+    }
   }
 
   switch (col.type) {

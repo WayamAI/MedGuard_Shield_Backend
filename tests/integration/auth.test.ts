@@ -133,7 +133,7 @@ describe("GET /api/auth/me", () => {
 
 describe("POST /api/auth/logout", () => {
   it("succeeds and clears the cookie", async () => {
-    const res = await request(app).post("/api/auth/logout");
+    const res = await request(app).post("/api/auth/logout").set("X-Drishti-Csrf", "1");
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ ok: true });
     expect(res.headers["set-cookie"]?.[0] ?? "").toContain("drishti_token=;");
@@ -144,14 +144,14 @@ describe("POST /api/auth/logout", () => {
    * behaviour rather than an accident of routing.
    */
   it("is callable without a session, since a logged-out client still has a cookie to clear", async () => {
-    const res = await request(app).post("/api/auth/logout");
+    const res = await request(app).post("/api/auth/logout").set("X-Drishti-Csrf", "1");
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ ok: true });
   });
 
   it("is idempotent — calling it twice is not an error", async () => {
-    await request(app).post("/api/auth/logout");
-    expect((await request(app).post("/api/auth/logout")).status).toBe(200);
+    await request(app).post("/api/auth/logout").set("X-Drishti-Csrf", "1");
+    expect((await request(app).post("/api/auth/logout").set("X-Drishti-Csrf", "1")).status).toBe(200);
   });
 
 });

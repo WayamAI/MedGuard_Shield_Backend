@@ -13,6 +13,9 @@ import {
   type SessionResult,
 } from "../services/authService.js";
 import { prisma } from "../lib/prisma.js";
+import { isProduction } from "../config.js";
+import { requireCsrfHeader } from "../middleware/csrf.js";
+import { createSensitiveAuthLimiter } from "../middleware/security.js";
 import { hashRefreshToken, listSessions, revokeOtherSessions, revokeSessionById } from "../services/authService.js";
 import { changePassword, requestPasswordReset, resetPassword } from "../services/passwordResetService.js";
 import { acceptInvite } from "../services/memberService.js";
@@ -43,11 +46,10 @@ export const loginBody = z.object({
  * "secure", which is exactly what the line above provides.
  */
 function cookieOptions(maxAgeSeconds: number) {
-  const isProd = process.env.NODE_ENV === "production";
   return {
     httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? ("none" as const) : ("lax" as const),
+    secure: isProduction,
+    sameSite: isProduction ? ("none" as const) : ("lax" as const),
     maxAge: maxAgeSeconds * 1000,
     path: "/",
   };
@@ -124,7 +126,7 @@ authRouter.post("/login", validate({ body: loginBody }), async (req, res, next) 
  * exchange; presenting it again revokes every session for that user, because
  * a replayed refresh token means the chain is compromised.
  */
-authRouter.post("/refresh", async (req, res, next) => {
+authRouter.post("/refresh", requireCsrfHeader, async (req, res, next) => {
   try {
     const presented = extractRefreshToken(req);
     if (!presented) {
@@ -153,7 +155,7 @@ authRouter.post("/refresh", async (req, res, next) => {
   }
 });
 
-authRouter.post("/logout", async (req, res, next) => {
+authRouter.post("/logout", requireCsrfHeader, async (req, res, next) => {
   try {
     const presented = extractRefreshToken(req);
     if (presented) await revokeRefreshToken(presented);
@@ -244,7 +246,7 @@ const acceptInviteBody = z.object({
 });
 
 /** Public: the invite token itself is the credential, and the caller isn't signed in yet. */
-authRouter.post("/accept-invite", validate({ body: acceptInviteBody }), async (req, res, next) => {
+authRouter.post("/accept-invite", createSensitiveAuthLimiter(), validate({ body: acceptInviteBody }), async (req, res, next) => {
   try {
     const { token, password } = acceptInviteBody.parse(req.body);
     const result = await acceptInvite(token, password);
@@ -267,7 +269,7 @@ const forgotPasswordBody = z.object({ email: z.string().email() });
  * Password cheat sheet. The real work (sending the email) only happens for
  * a known address, inside `requestPasswordReset`.
  */
-authRouter.post("/forgot-password", validate({ body: forgotPasswordBody }), async (req, res, next) => {
+authRouter.post("/forgot-password", createSensitiveAuthLimiter(), validate({ body: forgotPasswordBody }), async (req, res, next) => {
   try {
     const { email } = forgotPasswordBody.parse(req.body);
     await requestPasswordReset(email);
@@ -283,7 +285,7 @@ const resetPasswordBody = z.object({
   password: z.string().min(10, "Password must be at least 10 characters"),
 });
 
-authRouter.post("/reset-password", validate({ body: resetPasswordBody }), async (req, res, next) => {
+authRouter.post("/reset-password", createSensitiveAuthLimiter(), validate({ body: resetPasswordBody }), async (req, res, next) => {
   try {
     const { token, password } = resetPasswordBody.parse(req.body);
     const { userId } = await resetPassword(token, password);

@@ -20,6 +20,7 @@ export const LEGACY_ACCESS_COOKIE = "medguard_token";
 function cookieValue(req: Request, name: string): string | null {
   const header = req.get("cookie");
   if (!header) return null;
+  // eslint-disable-next-line security/detect-non-literal-regexp -- `name` is always one of this file's own ACCESS_COOKIE/REFRESH_COOKIE/LEGACY_ACCESS_COOKIE constants, never request-controlled.
   const match = header.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
   return match?.[1] ? decodeURIComponent(match[1]) : null;
 }

@@ -110,34 +110,39 @@ export async function censusOutside(
   const not = { not: organizationId };
   // Sequential, not Promise.all: these run on the single connection held by
   // the interactive transaction, and node-postgres does not support
-  // concurrent queries on one client.
-  const counts: number[] = [];
-  for (const query of [
-    tx.organization.count({ where: { id: not } }),
-    tx.user.count(),
-    tx.organizationMember.count({ where: { organizationId: not } }),
-    tx.refreshToken.count({ where: { organizationId: not } }),
-    tx.asset.count({ where: { organizationId: not } }),
-    tx.pHIType.count({ where: { organizationId: not } }),
-    tx.assetPHI.count({ where: { asset: { organizationId: not } } }),
-    tx.dataFlow.count({ where: { organizationId: not } }),
-    tx.risk.count({ where: { organizationId: not } }),
-    tx.riskHistory.count({ where: { organizationId: not } }),
-    tx.vendor.count({ where: { organizationId: not } }),
-    tx.vendorRisk.count({ where: { organizationId: not } }),
-    tx.vendorAssetAccess.count({ where: { vendor: { organizationId: not } } }),
-    tx.identity.count({ where: { organizationId: not } }),
-    tx.accessGrant.count({ where: { organizationId: not } }),
-    tx.threat.count({ where: { organizationId: not } }),
-    tx.control.count({ where: { organizationId: not } }),
-    tx.assetControl.count({ where: { asset: { organizationId: not } } }),
-    tx.policy.count({ where: { organizationId: not } }),
-    tx.policyControl.count({ where: { policy: { organizationId: not } } }),
-    tx.remediation.count({ where: { organizationId: not } }),
+  // concurrent queries on one client. Each entry is a thunk, not a fired
+  // query -- an array of already-called `tx.x.count()` promises would start
+  // every query immediately on construction, before the loop below ever
+  // gets to `await` the first one, which is exactly the bug this comment
+  // used to describe without actually avoiding.
+  const queries: Array<() => Promise<number>> = [
+    () => tx.organization.count({ where: { id: not } }),
+    () => tx.user.count(),
+    () => tx.organizationMember.count({ where: { organizationId: not } }),
+    () => tx.refreshToken.count({ where: { organizationId: not } }),
+    () => tx.asset.count({ where: { organizationId: not } }),
+    () => tx.pHIType.count({ where: { organizationId: not } }),
+    () => tx.assetPHI.count({ where: { asset: { organizationId: not } } }),
+    () => tx.dataFlow.count({ where: { organizationId: not } }),
+    () => tx.risk.count({ where: { organizationId: not } }),
+    () => tx.riskHistory.count({ where: { organizationId: not } }),
+    () => tx.vendor.count({ where: { organizationId: not } }),
+    () => tx.vendorRisk.count({ where: { organizationId: not } }),
+    () => tx.vendorAssetAccess.count({ where: { vendor: { organizationId: not } } }),
+    () => tx.identity.count({ where: { organizationId: not } }),
+    () => tx.accessGrant.count({ where: { organizationId: not } }),
+    () => tx.threat.count({ where: { organizationId: not } }),
+    () => tx.control.count({ where: { organizationId: not } }),
+    () => tx.assetControl.count({ where: { asset: { organizationId: not } } }),
+    () => tx.policy.count({ where: { organizationId: not } }),
+    () => tx.policyControl.count({ where: { policy: { organizationId: not } } }),
+    () => tx.remediation.count({ where: { organizationId: not } }),
     // Includes the tenant-less rows (failed logins), which must also survive.
-    tx.auditEvent.count({ where: { OR: [{ organizationId: not }, { organizationId: null }] } }),
-  ]) {
-    counts.push(await query);
+    () => tx.auditEvent.count({ where: { OR: [{ organizationId: not }, { organizationId: null }] } }),
+  ];
+  const counts: number[] = [];
+  for (const query of queries) {
+    counts.push(await query());
   }
 
   const labels = [
@@ -188,6 +193,7 @@ export async function resetDemo(options: { quiet?: boolean } = {}): Promise<Rese
   // scoping bug or a bad DATABASE_URL never loses data unrecoverably.
   if (process.env.DEMO_RESET_SKIP_BACKUP !== "yes") {
     const backupDir = join(process.cwd(), "prisma", "backups");
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- backupDir is built entirely from process.cwd() and fixed strings above, never from request/user input.
     mkdirSync(backupDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const backupPath = join(backupDir, `pre-reset_${dbName}_${stamp}.sql`);

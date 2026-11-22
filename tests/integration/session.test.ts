@@ -70,7 +70,7 @@ describe("POST /api/auth/refresh", () => {
     const first = await login();
 
     const res = await request(app)
-      .post("/api/auth/refresh")
+      .post("/api/auth/refresh").set("X-Drishti-Csrf", "1")
       .send({ refreshToken: first.refreshToken });
 
     expect(res.status).toBe(200);
@@ -80,7 +80,7 @@ describe("POST /api/auth/refresh", () => {
 
   it("revokes the presented token as part of the exchange", async () => {
     const first = await login();
-    await request(app).post("/api/auth/refresh").send({ refreshToken: first.refreshToken });
+    await request(app).post("/api/auth/refresh").set("X-Drishti-Csrf", "1").send({ refreshToken: first.refreshToken });
 
     const rows = await prisma.refreshToken.findMany({ orderBy: { id: "asc" } });
     expect(rows[0]!.revokedAt).not.toBeNull();
@@ -91,7 +91,7 @@ describe("POST /api/auth/refresh", () => {
   it("returns a working access token", async () => {
     const first = await login();
     const refreshed = await request(app)
-      .post("/api/auth/refresh")
+      .post("/api/auth/refresh").set("X-Drishti-Csrf", "1")
       .send({ refreshToken: first.refreshToken });
 
     const me = await request(app)
@@ -111,11 +111,11 @@ describe("POST /api/auth/refresh", () => {
   it("revokes every session when an already-rotated token is presented again", async () => {
     const first = await login();
     const second = await request(app)
-      .post("/api/auth/refresh")
+      .post("/api/auth/refresh").set("X-Drishti-Csrf", "1")
       .send({ refreshToken: first.refreshToken });
 
     const replay = await request(app)
-      .post("/api/auth/refresh")
+      .post("/api/auth/refresh").set("X-Drishti-Csrf", "1")
       .send({ refreshToken: first.refreshToken });
 
     expect(replay.status).toBe(401);
@@ -123,7 +123,7 @@ describe("POST /api/auth/refresh", () => {
 
     // The token issued by the legitimate refresh is dead too.
     const afterReplay = await request(app)
-      .post("/api/auth/refresh")
+      .post("/api/auth/refresh").set("X-Drishti-Csrf", "1")
       .send({ refreshToken: second.body.data.refreshToken });
     expect(afterReplay.status).toBe(401);
 
@@ -133,7 +133,7 @@ describe("POST /api/auth/refresh", () => {
 
   it("401s an unknown refresh token", async () => {
     const res = await request(app)
-      .post("/api/auth/refresh")
+      .post("/api/auth/refresh").set("X-Drishti-Csrf", "1")
       .send({ refreshToken: "f".repeat(64) });
     expect(res.status).toBe(401);
   });
@@ -145,7 +145,7 @@ describe("POST /api/auth/refresh", () => {
     });
 
     const res = await request(app)
-      .post("/api/auth/refresh")
+      .post("/api/auth/refresh").set("X-Drishti-Csrf", "1")
       .send({ refreshToken: session.refreshToken });
     expect(res.status).toBe(401);
   });
@@ -162,7 +162,7 @@ describe("POST /api/auth/refresh", () => {
     });
 
     const res = await request(app)
-      .post("/api/auth/refresh")
+      .post("/api/auth/refresh").set("X-Drishti-Csrf", "1")
       .send({ refreshToken: session.refreshToken });
 
     expect(res.status).toBe(403);
@@ -175,18 +175,18 @@ describe("logout", () => {
     const session = await login();
 
     const out = await request(app)
-      .post("/api/auth/logout")
+      .post("/api/auth/logout").set("X-Drishti-Csrf", "1")
       .send({ refreshToken: session.refreshToken });
     expect(out.status).toBe(200);
 
     const res = await request(app)
-      .post("/api/auth/refresh")
+      .post("/api/auth/refresh").set("X-Drishti-Csrf", "1")
       .send({ refreshToken: session.refreshToken });
     expect(res.status).toBe(401);
   });
 
   it("clears both cookies", async () => {
-    const res = await request(app).post("/api/auth/logout");
+    const res = await request(app).post("/api/auth/logout").set("X-Drishti-Csrf", "1");
     const cookies = ((res.headers["set-cookie"] ?? []) as unknown as string[]).join("; ");
     expect(cookies).toContain("drishti_token=;");
     expect(cookies).toContain("drishti_refresh=;");
@@ -207,10 +207,35 @@ describe("logout", () => {
 
     for (const session of [a, b]) {
       const attempt = await request(app)
-        .post("/api/auth/refresh")
+        .post("/api/auth/refresh").set("X-Drishti-Csrf", "1")
         .send({ refreshToken: session.refreshToken });
       expect(attempt.status).toBe(401);
     }
+  });
+});
+
+describe("CSRF protection on cookie-authenticated endpoints", () => {
+  it("rejects a refresh with no CSRF header, even with a valid refresh cookie", async () => {
+    const session = await login();
+    const res = await request(app)
+      .post("/api/auth/refresh")
+      .set("Cookie", `drishti_refresh=${session.refreshToken}`);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("CSRF_HEADER_REQUIRED");
+  });
+
+  it("rejects a logout with no CSRF header", async () => {
+    const res = await request(app).post("/api/auth/logout");
+    expect(res.status).toBe(403);
+  });
+
+  it("accepts a refresh once the CSRF header is present", async () => {
+    const session = await login();
+    const res = await request(app)
+      .post("/api/auth/refresh")
+      .set("X-Drishti-Csrf", "1")
+      .send({ refreshToken: session.refreshToken });
+    expect(res.status).toBe(200);
   });
 });
 

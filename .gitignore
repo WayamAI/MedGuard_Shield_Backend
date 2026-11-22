@@ -5,3 +5,6 @@ dist/
 .DS_Store
 src/generated/
 prisma/backups/
+# DB dumps at the repo root only -- never prisma/migrations/**/migration.sql.
+/*.sql
+/backup_*

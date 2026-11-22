@@ -15,7 +15,7 @@ import "dotenv/config";
 import { prisma } from "../src/lib/prisma.js";
 import { hashPassword } from "../src/services/authService.js";
 
-async function main() {
+export async function main() {
   const orgName = process.env.BOOTSTRAP_ORG_NAME;
   const orgSlug = process.env.BOOTSTRAP_ORG_SLUG;
   const adminEmail = process.env.BOOTSTRAP_ADMIN_EMAIL;
@@ -50,9 +50,11 @@ async function main() {
   console.log(`[seed:bootstrap] org "${org.name}" (${org.slug}), admin ${adminEmail}`);
 }
 
-main()
-  .catch((err) => {
-    console.error(err);
-    process.exitCode = 1;
-  })
-  .finally(() => prisma.$disconnect());
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main()
+    .catch((err) => {
+      console.error(err);
+      process.exitCode = 1;
+    })
+    .finally(() => prisma.$disconnect());
+}

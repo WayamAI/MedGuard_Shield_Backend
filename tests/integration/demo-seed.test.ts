@@ -305,3 +305,27 @@ describe("the seeded estate is coherent", () => {
     expect(lines.join("\n")).not.toContain(SEED_PASSWORD);
   });
 });
+
+describe("production safety", () => {
+  it("refuses to run with NODE_ENV=production", async () => {
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      await expect(seedDemo()).rejects.toThrow(/Refusing to seed demo users with NODE_ENV=production/);
+    } finally {
+      process.env.NODE_ENV = original;
+    }
+  });
+
+  it("runs with NODE_ENV=production only when explicitly overridden", async () => {
+    const original = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.DEMO_SEED_ALLOW_PRODUCTION = "yes";
+    try {
+      await expect(seedDemo()).resolves.toBeDefined();
+    } finally {
+      process.env.NODE_ENV = original;
+      delete process.env.DEMO_SEED_ALLOW_PRODUCTION;
+    }
+  });
+});

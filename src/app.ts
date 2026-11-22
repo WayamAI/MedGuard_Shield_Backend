@@ -49,7 +49,9 @@ const VERSION = ((): string => {
   }
 })();
 import { requireAuth } from "./middleware/auth.js";
-import { createGlobalLimiter, createIngestLimiter, createLoginLimiter } from "./middleware/security.js";
+import {
+  createExportLimiter, createGlobalLimiter, createIngestLimiter, createLoginLimiter,
+} from "./middleware/security.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { httpLogger } from "./middleware/logging.js";
 
@@ -72,6 +74,10 @@ export function createApp() {
   app.set("trust proxy", 1);
 
   app.use(createGlobalLimiter());
+  // Self-skipping for every request that isn't a `?format=csv` export, so
+  // this one mount covers every export endpoint without touching each
+  // route file individually.
+  app.use(createExportLimiter());
 
   /**
    * CORS. A comma-separated FRONTEND_ORIGIN allows more than one origin, which

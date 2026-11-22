@@ -179,6 +179,28 @@ describe("MFA", () => {
     const login = await request(app).post("/api/auth/login").send({ email: "viewer@test.local", password: TEST_PASSWORD });
     expect(login.status).toBe(200);
   });
+
+  it("a refresh token can only ever come from a login that already passed MFA — refresh itself asks for no code and cannot be used to skip it", async () => {
+    const { secret } = await enrollAndConfirm();
+    const code = await generate({ secret });
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "viewer@test.local", password: TEST_PASSWORD, mfaCode: code });
+    expect(login.status).toBe(200);
+
+    // The refresh token is only reachable at all because the login above
+    // already cleared MFA; refreshing it does not, and should not, ask again.
+    const refreshed = await request(app)
+      .post("/api/auth/refresh")
+      .set("X-Drishti-Csrf", "1")
+      .send({ refreshToken: login.body.data.refreshToken });
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body.data.user.email).toBe("viewer@test.local");
+
+    // There is no route that hands out a refresh token from just a password —
+    // confirmed by the companion test above that a bare login attempt with no
+    // code is turned back with MFA_REQUIRED and no token of any kind.
+  });
 });
 
 describe("sessions", () => {
@@ -201,7 +223,7 @@ describe("sessions", () => {
       .set("Cookie", `drishti_refresh=${second.body.data.refreshToken}`);
     expect(revoke.status).toBe(200);
 
-    const stillWorks = await request(app).post("/api/auth/refresh").set("Cookie", `drishti_refresh=${second.body.data.refreshToken}`);
+    const stillWorks = await request(app).post("/api/auth/refresh").set("X-Drishti-Csrf", "1").set("Cookie", `drishti_refresh=${second.body.data.refreshToken}`);
     expect(stillWorks.status).toBe(200);
   });
 });

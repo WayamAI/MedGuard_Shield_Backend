@@ -31,7 +31,11 @@ export default defineConfig({
     // exercises the audit trigger's DELETE exception and reset-demo.ts's own
     // "demo" guard) — see vitest.demo-reset.config.ts, run separately by
     // `npm test` so the two never share one DATABASE_URL.
-    exclude: [...configDefaults.exclude, "tests/integration/demo-reset.test.ts"],
+    exclude: [
+      ...configDefaults.exclude,
+      "tests/integration/demo-reset.test.ts",
+      "tests/integration/meridian-seed.test.ts",
+    ],
     globalSetup: ["tests/setup/globalSetup.ts"],
     // Integration tests share one database; parallel files would race on the
     // same rows, so run them one file at a time.

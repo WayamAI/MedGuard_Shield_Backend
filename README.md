@@ -183,6 +183,17 @@ driver adapter in `src/lib/prisma.ts` at runtime — both off the same `DATABASE
 | `npm run lint` | eslint |
 | `npx prisma db seed` | reseed (idempotent — wipes and rebuilds) |
 
+### Two separate demo datasets — don't mix them up
+
+| Command | Script | Organization | Destructive? | Production? |
+|---|---|---|---|---|
+| `npm run db:seed` | `prisma/seed.ts` | **Meridian Health System** (slug `meridian`) — the CEO-walkthrough demo, with `admin@meridian.org` / `admin@wayam.ai` etc. | Yes — `TRUNCATE`s and fully rebuilds every core table | Refuses under `NODE_ENV=production` unless `SEED_ALLOW_PRODUCTION=yes` |
+| `npm run db:seed:demo` | `prisma/seed-demo.ts` | **Drishti Demo Healthcare** (slug `drishti-demo`) — a separate, unrelated demo org, upsert-only | No — never deletes anything | Refuses under `NODE_ENV=production` unless `DEMO_SEED_ALLOW_PRODUCTION=yes` |
+| `npm run db:demo:reset` | `prisma/reset-demo.ts` | **Drishti Demo Healthcare** only — deletes and re-seeds just that org, backs up the database first | Scoped-destructive (one org) | Refuses unless the database name contains "demo" |
+| `npm run db:seed:bootstrap` | `prisma/seed-bootstrap.ts` | Whatever org/admin you name via `BOOTSTRAP_ORG_NAME`/`BOOTSTRAP_ORG_SLUG`/`BOOTSTRAP_ADMIN_EMAIL`/`BOOTSTRAP_ADMIN_PASSWORD` | No — upsert-only, no demo fixtures | The intended path for a real install — refuses to run at all without all four env vars set |
+
+**There is no scoped reset for the Meridian org** — `db:demo:reset` only ever touches Drishti Demo Healthcare. Resetting Meridian means re-running `npm run db:seed`, which rebuilds the whole database, not just that one org.
+
 ## Endpoints
 
 | Method | Path | Purpose |

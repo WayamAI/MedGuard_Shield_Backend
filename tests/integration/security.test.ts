@@ -104,3 +104,24 @@ describe("global rate limiting", () => {
     expect(res.headers["ratelimit"]).toMatch(/limit=\d+, remaining=\d+/);
   });
 });
+
+describe("CORS", () => {
+  const app = createApp();
+
+  it("allows the configured FRONTEND_ORIGIN with credentials", async () => {
+    const res = await request(app).options("/api/assets").set("Origin", "http://localhost:8080").set("Access-Control-Request-Method", "GET");
+    expect(res.headers["access-control-allow-origin"]).toBe("http://localhost:8080");
+    expect(res.headers["access-control-allow-credentials"]).toBe("true");
+  });
+
+  it("does not reflect an arbitrary origin — no wildcard, no echo", async () => {
+    const res = await request(app).options("/api/assets").set("Origin", "https://evil.example").set("Access-Control-Request-Method", "GET");
+    expect(res.headers["access-control-allow-origin"]).not.toBe("https://evil.example");
+    expect(res.headers["access-control-allow-origin"]).not.toBe("*");
+  });
+
+  it("a cross-origin GET from an unapproved origin carries no CORS headers permitting it to be read", async () => {
+    const res = await request(app).get("/health").set("Origin", "https://evil.example");
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+});

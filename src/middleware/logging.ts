@@ -23,15 +23,24 @@ export const REQUEST_ID_HEADER = "x-request-id";
  * that should never reach application logs per the PHI-metadata-only
  * invariant.
  */
-const REDACT_PATHS = [
+export const REDACT_PATHS = [
   "req.headers.authorization",
   "req.headers.cookie",
+  "req.headers[\"x-api-key\"]",
   "res.headers[\"set-cookie\"]",
   '*.password',
   '*.passwordHash',
   '*.token',
   '*.accessToken',
   '*.refreshToken',
+  '*.apiKey',
+  '*.secret',
+  '*.mfaSecret',
+  '*.code',
+  '*.recoveryCodes',
+  '*.recoveryCode',
+  '*.tokenHash',
+  '*.keyHash',
   '*.ssn',
   '*.mrn',
   '*.dob',
