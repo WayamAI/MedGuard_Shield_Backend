@@ -45,5 +45,18 @@ export default defineConfig({
     // failed a hook that was merely slow, not broken.
     hookTimeout: 30_000,
     env: TEST_ENV,
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html"],
+      include: ["src/**/*.ts"],
+      exclude: ["src/**/*.test.ts", "src/generated/**"],
+      // The risk-scoring engine is the one place a silent regression changes
+      // a customer-facing number; everything else is covered by the broader
+      // route/service integration tests but not held to a numeric floor yet.
+      thresholds: {
+        "src/services/riskScoring.ts": { statements: 100, branches: 100 },
+        "src/services/riskFactors.ts": { statements: 100, branches: 100 },
+      },
+    },
   },
 });

@@ -78,3 +78,9 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # Separate from `npm test`: coverage instrumentation changes stack
+      # traces/timing enough that it's worth keeping the main suite run
+      # clean, and this only needs to run against the primary database.
+      - name: Coverage (risk-engine gate)
+        run: npm run test:coverage
