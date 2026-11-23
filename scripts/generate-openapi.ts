@@ -237,28 +237,33 @@ function buildPaths() {
   return paths;
 }
 
-const document = {
-  openapi: "3.1.0",
-  info: {
-    title: "Drishti API",
-    version: "0.3.0",
-    description:
-      "Healthcare PHI risk intelligence platform API. Generated from the Zod " +
-      "schemas that validate every route — see scripts/generate-openapi.ts.",
-  },
-  servers: [{ url: "/api" }],
-  components: {
-    securitySchemes: {
-      sessionCookie: {
-        type: "apiKey",
-        in: "cookie",
-        name: "drishti_access",
-        description: "httpOnly access-token cookie set by POST /api/auth/login",
+export function buildDocument() {
+  return {
+    openapi: "3.1.0",
+    info: {
+      title: "Drishti API",
+      version: "0.3.0",
+      description:
+        "Healthcare PHI risk intelligence platform API. Generated from the Zod " +
+        "schemas that validate every route — see scripts/generate-openapi.ts.",
+    },
+    servers: [{ url: "/api" }],
+    components: {
+      securitySchemes: {
+        sessionCookie: {
+          type: "apiKey",
+          in: "cookie",
+          name: "drishti_access",
+          description: "httpOnly access-token cookie set by POST /api/auth/login",
+        },
       },
     },
-  },
-  paths: buildPaths(),
-};
+    paths: buildPaths(),
+  };
+}
 
-writeFileSync("openapi.json", JSON.stringify(document, null, 2) + "\n");
-console.log(`[openapi] wrote openapi.json — ${Object.keys(document.paths).length} paths`);
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const document = buildDocument();
+  writeFileSync("openapi.json", JSON.stringify(document, null, 2) + "\n");
+  console.log(`[openapi] wrote openapi.json — ${Object.keys(document.paths).length} paths`);
+}
