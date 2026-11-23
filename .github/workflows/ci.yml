@@ -37,6 +37,11 @@ jobs:
     env:
       DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_test?schema=public
       TEST_DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_test?schema=public
+      # demo-reset.test.ts and meridian-seed.test.ts each need their own
+      # database (see vitest.demo-reset.config.ts / vitest.meridian-seed.config.ts) —
+      # `npm test` chains all three configs, so CI must provision all three.
+      DEMO_TEST_DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_demo_test?schema=public
+      MERIDIAN_TEST_DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_meridian_test?schema=public
 
     steps:
       - uses: actions/checkout@v5
@@ -59,6 +64,11 @@ jobs:
       # before anything imports it.
       - name: Generate Prisma client
         run: npx prisma generate
+
+      - name: Create demo/meridian test databases
+        run: |
+          PGPASSWORD=medguard psql -h localhost -U medguard -d medguard_test -c 'CREATE DATABASE medguard_demo_test;'
+          PGPASSWORD=medguard psql -h localhost -U medguard -d medguard_test -c 'CREATE DATABASE medguard_meridian_test;'
 
       - name: Typecheck
         run: npm run typecheck
