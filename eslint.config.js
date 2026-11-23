@@ -6,7 +6,9 @@ import security from "eslint-plugin-security";
 export default tseslint.config(
   {
     // Generated Prisma client and build output are not ours to lint.
-    ignores: ["dist/**", "src/generated/**", "node_modules/**"],
+    // scripts/k6/** run in k6's own JS runtime (__ENV, http, check globals
+    // from its module system), not Node — nothing here lints meaningfully.
+    ignores: ["dist/**", "src/generated/**", "node_modules/**", "scripts/k6/**"],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

@@ -184,3 +184,27 @@ Run 3: 650/650 passed
 The run-1 failure was a flaky boundary condition in an unrelated, unmodified test file (`git status` confirmed it was clean throughout this phase), not caused by any Phase 3 change — it passed cleanly on the immediate re-run and again on run 3.
 
 **Final gates:** `npx tsc --noEmit` — 0 errors. `npm run lint` — 0 errors, 0 warnings. `npm audit --omit=dev` — 3 high (all one documented exception, see above).
+
+## Phase 4 — testing hardening — 2026-11-23
+
+**CI bug fix (found before any new Phase 4 work, not caused by it):** `npm test` has chained `vitest.config.ts` + `vitest.demo-reset.config.ts` + `vitest.meridian-seed.config.ts` since the Phase 3 round, each needing its own database, but `.github/workflows/ci.yml` only ever provisioned `medguard_test`. CI last ran 2026-09-24, before that change — the next push to `main` would have failed on the second and third legs. Fixed by adding `DEMO_TEST_DATABASE_URL`/`MERIDIAN_TEST_DATABASE_URL` env vars and a `psql CREATE DATABASE` step; `globalSetup.ts` migrates each automatically.
+
+**Coverage gate:** `@vitest/coverage-v8@3.2.4` (pinned to the installed `vitest@^3.2.4` — a `@vitest/coverage-v8@5` would have forced a `vitest` major bump, forbidden). `riskScoring.ts` and `riskFactors.ts` were already at 100%/100% statements/branches from the existing suite; the threshold now locks that in. Verified the gate is real, not decorative, by deliberately setting `riskScoring.ts`'s statement threshold to 101% and confirming `ERROR: Coverage for statements (100%) does not meet ... threshold (101%)`, then reverting before committing. Added as a separate CI step (`npm run test:coverage`) rather than folded into `npm test`, so instrumentation overhead doesn't affect the main suite's timing.
+
+**Route-inventory drift test** (`tests/route-inventory.test.ts`): parses the actual `(method, path)` pairs registered in `src/routes/*.ts` and diffs them against `docs/engineering/ROUTE_INVENTORY.md`'s table, in both directions (undocumented-but-live, and documented-but-dead). Verified by temporarily adding a throwaway route and confirming the test failed with the exact route named, then removing it and confirming green again.
+
+**OpenAPI contract test** (`tests/openapi-contract.test.ts`): asserts `openapi.json` is byte-identical to what `scripts/generate-openapi.ts`'s document builder produces right now. Required exporting that builder behind an `import.meta.url` guard (previously a pure side-effecting script) — confirmed `npm run openapi:generate`'s file output is unchanged byte-for-byte after the refactor. Verified the test catches drift by mutating a string in the committed `openapi.json` and confirming failure, then reverting.
+
+Note on scope: the generator has no response-body schemas (every route's `"200"` entry is just `{ description: "Success" }`), so this is a request-shape/spec-staleness contract, not a live-response-body contract — that would need response schemas added to the generator first, which wasn't attempted here (a real feature addition, not a test).
+
+**k6 smoke test** (`scripts/k6/smoke.js`, run via `npm run perf:smoke`): login (once, in `setup()`) → risk distribution → list assets → recompute one asset, 20 VUs × 3 iterations. Run against a real local instance seeded with the Meridian data:
+```
+checks_succeeded: 100.00% 181 out of 181
+http_req_duration: p(95)=96.59ms  (budget: p(95)<500ms)
+http_req_failed:   0.00%          (budget: <1%)
+```
+Two real issues found and fixed while getting this to run, both now documented in the script itself:
+1. The original `constant-vus` shape (20 VUs sustained for 30s) generates thousands of requests/sec, which instantly trips the app's own production-safe rate limiters (300 req/15min global, 10 logins/15min) — measuring the limiter, not the app. Changed to `per-vu-iterations` (20 VUs × 3 iterations) and moved login into k6's `setup()` so it happens once for the whole run, not once per iteration.
+2. **A genuine environment hazard, not a code bug:** this machine has an unrelated, long-running dev server for a different, older checkout of this project (at a different path) already bound to `:4000`. `npm run dev` for the current checkout silently failed to bind and kept running anyway (tsx watch mode doesn't exit on a bind error), so every curl/k6 request against `localhost:4000` was actually hitting that other, stale process the whole time — which explained why its rate-limit state didn't reset on "restart." Did not touch that other process (not part of this work); ran this checkout on `PORT=4100` instead and documented the `lsof -i :4000` escape hatch directly in the script's header comment for whoever hits this next.
+
+**Not attempted this round (deferred, needs user input):** the Testcontainers migration (`tests/setup/globalSetup.ts` replacing the local-Postgres assumption with `@testcontainers/postgresql`) and the ZAP baseline scan both need a working Docker daemon; this machine's Docker Desktop process has been running since 2026-10-28 but its socket is unreachable (`Cannot connect to the Docker daemon`). Did not attempt to restart/repair Docker. User chose to skip both for this round rather than wait on a Docker fix.
