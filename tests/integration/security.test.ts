@@ -49,7 +49,11 @@ describe("security headers", () => {
 });
 
 describe("login rate limiting", () => {
-  const app = createApp();
+  // Explicit override: the app-wide test default is generous (see
+  // createLoginLimiter's comment) because most files just need logins to
+  // not randomly 429; this block is the one place that needs the real
+  // small-number boundary.
+  const app = createApp({ loginLimit: 5 });
 
   it("rejects the 6th failed attempt with 429 and a structured body", async () => {
     const attempt = () =>
@@ -181,10 +185,16 @@ describe("the authenticated rate limiter is keyed per user, not per IP", () => {
    * createLoginLimiter stays IP-keyed, unaffected by any of the above.
    */
   it("login brute force from one IP is still throttled", async () => {
-    for (let i = 0; i < 10; i++) {
-      await request(app).post("/api/auth/login").send({ email: "admin@test.local", password: "wrong" });
+    // Its own app with the real boundary, same reason as the "login rate
+    // limiting" block above — not the shared `app`, whose login limit is
+    // left generous so the other tests in this block aren't exposed to the
+    // same cross-test budget-exhaustion flake that motivated making it
+    // configurable in the first place.
+    const bruteForceApp = createApp({ loginLimit: 5 });
+    for (let i = 0; i < 5; i++) {
+      await request(bruteForceApp).post("/api/auth/login").send({ email: "admin@test.local", password: "wrong" });
     }
-    const res = await request(app).post("/api/auth/login").send({ email: "admin@test.local", password: "wrong" });
+    const res = await request(bruteForceApp).post("/api/auth/login").send({ email: "admin@test.local", password: "wrong" });
     expect(res.status).toBe(429);
   });
 });

@@ -57,7 +57,7 @@ import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { httpLogger } from "./middleware/logging.js";
 
-export function createApp() {
+export function createApp(options: { loginLimit?: number } = {}) {
   const app = express();
 
   // Security headers first, so they are present on every response including
@@ -163,7 +163,7 @@ export function createApp() {
   // comment for why that's the right call here and nowhere else past this
   // point. Login carries its own much tighter limit on top of this one.
   app.use("/api/auth", createGlobalLimiter());
-  app.use("/api/auth/login", createLoginLimiter());
+  app.use("/api/auth/login", createLoginLimiter({ limit: options.loginLimit }));
   app.use("/api/auth", authRouter);
 
   // Ingestion is authenticated by its own API key, not a session, so it is

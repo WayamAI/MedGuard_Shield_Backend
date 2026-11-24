@@ -88,11 +88,21 @@ export function createAuthenticatedLimiter(options: { limit?: number } = {}): Ra
  * Login attempts. Counts only failures — `skipSuccessfulRequests` means a user
  * who keeps signing in legitimately is never locked out, while someone guessing
  * burns their budget quickly.
+ *
+ * The test-mode default is generous (not the production value of 10) because
+ * integration test files share one createApp() instance across many tests
+ * that each log in once or twice — tens of real logins per file is normal,
+ * and expecting that cumulative volume to stay under a production-sized
+ * failure budget was the actual cause of an intermittent "login for X
+ * returned no token" flake once bcrypt got fast enough (see
+ * authService.ts's BCRYPT_COST) for those logins to land close together.
+ * A test that wants to exercise the real boundary passes `{ limit }`
+ * explicitly instead (see security.test.ts's "login rate limiting" block).
  */
-export function createLoginLimiter(): RateLimitRequestHandler {
+export function createLoginLimiter(options: { limit?: number } = {}): RateLimitRequestHandler {
   return rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: isTest ? 5 : 10,
+    limit: options.limit ?? (isTest ? 1000 : 10),
     skipSuccessfulRequests: true,
     standardHeaders: "draft-7",
     legacyHeaders: false,
