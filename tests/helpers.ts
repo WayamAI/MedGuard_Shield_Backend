@@ -263,5 +263,5 @@ export async function latestMailTo(to: string): Promise<{ subject: string; text:
 export function tokenFromMail(text: string): string {
   const match = text.match(/token=([A-Za-z0-9_-]+)/);
   if (!match) throw new Error(`No token found in mail body: ${text}`);
-  return match[1];
+  return match[1]!;
 }

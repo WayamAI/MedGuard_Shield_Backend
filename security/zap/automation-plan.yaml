@@ -7,8 +7,10 @@
 #   Native (brew install --cask zap):
 #     zap.sh -cmd -autorun security/zap/automation-plan.yaml
 #
-#   CI (.github/workflows/zap.yml): the official zaproxy/action-full,
-#   pointed at this same file.
+#   CI: the `zap` job in .github/workflows/ci.yml, which runs this same
+#   file through the official ghcr.io/zaproxy/zaproxy:stable Docker image
+#   directly (not one of the zaproxy/action-* marketplace actions — those
+#   don't take an arbitrary custom Automation Framework plan).
 #
 # Authentication: the API authenticates every mutating route via an
 # Authorization: Bearer header only (see src/middleware/auth.ts) — no
@@ -49,8 +51,8 @@ jobs:
       - description: "Bearer auth for every request ZAP makes"
         url: ""
         matchType: req_header
-        matchStr: "Authorization"
-        regex: false
+        matchString: "Authorization"
+        matchRegex: false
         replacementString: "Bearer ${DRISHTI_ZAP_TOKEN}"
 
   - type: openapi
@@ -85,7 +87,12 @@ jobs:
   - type: report
     parameters:
       template: "traditional-json"
-      reportDir: "security/zap"
+      # "." here, not "security/zap": the CI job mounts /tmp as /zap/wrk
+      # (see .github/workflows/ci.yml's "Run ZAP" step) and its "Upload ZAP
+      # report" step reads the result straight out of /tmp/zap-report.json,
+      # so the report has to land at the mount's root. Running this plan
+      # natively instead, point reportDir wherever's convenient.
+      reportDir: "."
       reportFile: "zap-report"
       reportTitle: "Drishti API — ZAP baseline/active scan"
     risks:

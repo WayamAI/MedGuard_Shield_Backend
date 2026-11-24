@@ -39,9 +39,9 @@ function parseInventory(): Row[] {
   const re = /^\| (GET|POST|PATCH|PUT|DELETE) \| `([^`]+)` \| `([a-z]+:[a-z-]+)`/gm;
   let match: RegExpExecArray | null;
   while ((match = re.exec(doc))) {
-    const key = `${match[1]} ${match[2]}`;
+    const key = `${match[1]!} ${match[2]!}`;
     if (SKIP_PATHS.has(key)) continue;
-    rows.push({ method: match[1], path: match[2], permission: match[3] as Permission });
+    rows.push({ method: match[1]!, path: match[2]!, permission: match[3] as Permission });
   }
   return rows;
 }

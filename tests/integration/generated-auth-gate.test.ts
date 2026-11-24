@@ -48,10 +48,10 @@ function parseInventory(): Array<{ method: string; path: string }> {
   const re = /^\| (GET|POST|PATCH|PUT|DELETE) \| `([^`]+)` \|/gm;
   let match: RegExpExecArray | null;
   while ((match = re.exec(doc))) {
-    if (match[2].startsWith("/health")) continue;
-    const key = `${match[1]} ${match[2]}`;
+    if (match[2]!.startsWith("/health")) continue;
+    const key = `${match[1]!} ${match[2]!}`;
     if (PUBLIC_ROUTES.has(key) || SKIP_ROUTES.has(key)) continue;
-    routes.push({ method: match[1], path: match[2] });
+    routes.push({ method: match[1]!, path: match[2]! });
   }
   return routes;
 }

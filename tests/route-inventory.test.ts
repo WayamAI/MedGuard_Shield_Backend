@@ -52,8 +52,8 @@ function extractRoutes(file: string, prefix: string): Array<{ method: string; pa
   const re = /^\w+\.(get|post|patch|put|delete)\(\s*["'`]([^"'`]*)["'`]/gm;
   let match: RegExpExecArray | null;
   while ((match = re.exec(src))) {
-    const method = match[1].toUpperCase();
-    const subpath = match[2];
+    const method = match[1]!.toUpperCase();
+    const subpath = match[2]!;
     const path = (prefix + subpath).replace(/\/$/, "") || prefix;
     routes.push({ method, path });
   }
@@ -67,11 +67,11 @@ function extractPhiInventoryRoutes(file: string): Array<{ method: string; path: 
   const re = /^(\w+)\.(get|post|patch|put|delete)\(\s*["'`]([^"'`]*)["'`]/gm;
   let match: RegExpExecArray | null;
   while ((match = re.exec(src))) {
-    const varName = match[1];
+    const varName = match[1]!;
     const prefix = PHI_INVENTORY_PREFIXES[varName];
     if (!prefix) continue;
-    const method = match[2].toUpperCase();
-    const subpath = match[3];
+    const method = match[2]!.toUpperCase();
+    const subpath = match[3]!;
     const path = (prefix + subpath).replace(/\/$/, "") || prefix;
     routes.push({ method, path });
   }
@@ -99,8 +99,8 @@ function documentedRoutes(): Set<string> {
   const re = /^\| (GET|POST|PATCH|PUT|DELETE) \| `([^`]+)` \|/gm;
   let match: RegExpExecArray | null;
   while ((match = re.exec(doc))) {
-    if (match[2].startsWith("/health")) continue; // not under src/routes
-    documented.add(`${match[1]} ${match[2]}`);
+    if (match[2]!.startsWith("/health")) continue; // not under src/routes
+    documented.add(`${match[1]!} ${match[2]!}`);
   }
   return documented;
 }

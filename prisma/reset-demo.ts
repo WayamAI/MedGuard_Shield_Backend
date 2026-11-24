@@ -202,7 +202,7 @@ export async function resetDemo(options: { quiet?: boolean } = {}): Promise<Rese
     // Prisma's "?schema=" suffix on DATABASE_URL isn't one of them and makes
     // pg_dump reject the whole URL. Not needed here anyway: pg_dump dumps
     // every schema in the target database by default.
-    const pgDumpUrl = dbUrl.split("?")[0];
+    const pgDumpUrl = dbUrl.split("?")[0] ?? dbUrl;
     execFileSync("pg_dump", [pgDumpUrl, "-f", backupPath], { stdio: "inherit" });
     log(`[demo-reset] backup complete: ${backupPath}`);
   }

@@ -70,7 +70,7 @@ function auditedMutatingRoutes(): Array<{ method: string; path: string }> {
   const re = /^\| (POST|PATCH|PUT|DELETE) \| `([^`]+)` \| [^|]+ \| [^|]+ \| (yes[^|]*) \|/gm;
   let match: RegExpExecArray | null;
   while ((match = re.exec(doc))) {
-    rows.push({ method: match[1], path: match[2] });
+    rows.push({ method: match[1]!, path: match[2]! });
   }
   return rows;
 }
