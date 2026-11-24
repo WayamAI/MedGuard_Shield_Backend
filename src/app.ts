@@ -50,8 +50,10 @@ const VERSION = ((): string => {
 })();
 import { requireAuth } from "./middleware/auth.js";
 import {
-  createExportLimiter, createGlobalLimiter, createIngestLimiter, createLoginLimiter,
+  createAuthenticatedLimiter, createExportLimiter, createGlobalLimiter, createIngestLimiter,
+  createLoginLimiter,
 } from "./middleware/security.js";
+import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { httpLogger } from "./middleware/logging.js";
 
@@ -72,12 +74,6 @@ export function createApp() {
   // Trust the first proxy hop so rate limiting keys on the real client IP
   // rather than a load balancer's, once this sits behind one.
   app.set("trust proxy", 1);
-
-  app.use(createGlobalLimiter());
-  // Self-skipping for every request that isn't a `?format=csv` export, so
-  // this one mount covers every export endpoint without touching each
-  // route file individually.
-  app.use(createExportLimiter());
 
   /**
    * CORS. A comma-separated FRONTEND_ORIGIN allows more than one origin, which
@@ -160,20 +156,38 @@ export function createApp() {
     });
   }
 
-  // Public: you cannot present a token before you have one. Login carries its
-  // own much tighter limit on top of the global one.
+  // /api/auth is the one router with a genuinely mixed public/protected
+  // route list (login/forgot-password/reset-password/accept-invite are
+  // public; /me, /mfa/*, /sessions, /change-password, /logout-all require
+  // requireAuth internally, per-route). IP-keyed: see createGlobalLimiter's
+  // comment for why that's the right call here and nowhere else past this
+  // point. Login carries its own much tighter limit on top of this one.
+  app.use("/api/auth", createGlobalLimiter());
   app.use("/api/auth/login", createLoginLimiter());
   app.use("/api/auth", authRouter);
 
   // Ingestion is authenticated by its own API key, not a session, so it is
   // mounted here too — before the session gate below would otherwise
-  // reject it for having no cookie or bearer token.
-  app.use("/api/ingest", createIngestLimiter(), ingestRouter);
+  // reject it for having no cookie or bearer token. requireApiKey runs
+  // before the limiter (not after, as a naive copy of the pattern above
+  // would do) so createIngestLimiter can key on req.ctx.connectorId.
+  app.use("/api/ingest", requireApiKey, createIngestLimiter(), ingestRouter);
 
   // Everything past this line requires a valid session. requireAuth is also
   // where req.ctx.organizationId originates — every scoped query downstream
   // filters on it, and nothing reads a tenant id from request input.
+  //
+  // createAuthenticatedLimiter and createExportLimiter are both keyed on
+  // req.ctx.userId, so they must be mounted after requireAuth populates it —
+  // mounting them at the top of the file (as a naive "global limiter" read)
+  // would silently fall back to IP-keying and reintroduce the exact
+  // shared-NAT problem they exist to fix.
   app.use("/api", requireAuth);
+  app.use("/api", createAuthenticatedLimiter());
+  // Self-skipping for every request that isn't a `?format=csv` export, so
+  // this one mount covers every export endpoint without touching each
+  // route file individually.
+  app.use("/api", createExportLimiter());
 
   app.use("/api/organization", organizationRouter);
   app.use("/api/members", membersRouter);

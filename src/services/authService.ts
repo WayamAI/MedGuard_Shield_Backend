@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import type { Role } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
-import { env } from "../config.js";
+import { env, isProduction, isTest } from "../config.js";
 import { HttpError } from "../lib/errors.js";
 import type { TenantContext } from "../lib/tenant.js";
 import { requiresMfa, verifyMfaChallenge } from "./mfaService.js";
@@ -65,8 +65,27 @@ function signingSecret(): string {
   return env.JWT_SECRET;
 }
 
-/** OWASP Password Storage Cheat Sheet: bcrypt work factor >= 10, 12 as a safer modern baseline. */
-const BCRYPT_COST = 12;
+/**
+ * OWASP Password Storage Cheat Sheet: bcrypt work factor >= 10, 12 as a safer
+ * modern baseline. Lowered under NODE_ENV=test only — the integration suite
+ * hashes and compares real passwords hundreds of times, and cost-12 bcrypt
+ * is deliberately slow, which is exactly what makes it the wrong thing to
+ * pay for repeatedly in a test run. `assertProductionBcryptCost` below is
+ * the regression test for this line in the only direction that matters:
+ * production never silently inherits the fast path.
+ */
+const BCRYPT_COST = isTest ? 4 : 12;
+
+/** Defense in depth for the line above: fails loudly rather than booting with a weakened cost factor in production. */
+export function assertProductionBcryptCost(): void {
+  if (isProduction && BCRYPT_COST < 12) {
+    throw new Error(`BCRYPT_COST is ${BCRYPT_COST} in production; must be >= 12`);
+  }
+}
+// Runs at import time in every environment, not just when something
+// remembers to call it from server startup — a no-op everywhere but
+// production, where it refuses to let the module load with a weakened cost.
+assertProductionBcryptCost();
 
 export async function hashPassword(plaintext: string): Promise<string> {
   return bcrypt.hash(plaintext, BCRYPT_COST);

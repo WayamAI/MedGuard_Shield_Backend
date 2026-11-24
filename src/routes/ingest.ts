@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { z } from "zod";
-import { requireApiKey } from "../middleware/apiKeyAuth.js";
 import { validate } from "../middleware/validate.js";
 import { ok } from "../lib/http.js";
 import { toCsv } from "../lib/csv.js";
@@ -10,8 +9,12 @@ import { ENTITY_SLUGS, specFor } from "../services/importSpec.js";
 import { runImport, validateImport } from "../services/importService.js";
 import type { TenantContext } from "../lib/tenant.js";
 
+/**
+ * requireApiKey is mounted in app.ts, before this router, not here — it has
+ * to run before createIngestLimiter so that limiter can key on
+ * req.ctx.connectorId instead of falling back to the caller's IP.
+ */
 export const ingestRouter = Router();
-ingestRouter.use(requireApiKey);
 
 const ingestBody = z.object({
   rows: z.array(z.record(z.string(), z.unknown())).min(1, "At least one row is required"),
