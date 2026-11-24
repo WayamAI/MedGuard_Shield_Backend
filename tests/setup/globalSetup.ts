@@ -1,5 +1,7 @@
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { Client } from "pg";
+
+const MAILPIT_HTTP = process.env.MAILPIT_URL ?? "http://127.0.0.1:8025";
 
 /**
  * Brings the test database up to the current schema once per run — and, as
@@ -30,6 +32,53 @@ export default async function globalSetup() {
     stdio: "pipe",
     env: { ...process.env, DATABASE_URL: url },
   });
+
+  await ensureMailpitRunning();
+}
+
+/**
+ * The auth-email tests (invite, forgot-password) read what mailer.ts "sent"
+ * back out of Mailpit's HTTP API (see tests/helpers.ts's clearMailpit/
+ * latestMailTo). Previously a docker-compose service; now the native
+ * binary (`brew install mailpit`), started here if it isn't already
+ * running. Fails with a clear message if the binary isn't installed at
+ * all, rather than letting every email test fail separately with a
+ * confusing fetch error.
+ */
+async function ensureMailpitRunning(): Promise<void> {
+  if (await mailpitReachable()) return;
+
+  try {
+    // detached + unref: outlives this process, the same way `mailpit &`
+    // from a shell would, so it stays up across every vitest config this
+    // globalSetup runs for instead of being killed when the first one exits.
+    const child = spawn("mailpit", [], { stdio: "ignore", detached: true });
+    child.unref();
+  } catch {
+    throw new Error(
+      "Mailpit is not running and the `mailpit` binary was not found. " +
+        "Install it with `brew install mailpit`, or start it yourself, then re-run the tests.",
+    );
+  }
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (await mailpitReachable()) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(
+    `Started \`mailpit\` but it never became reachable at ${MAILPIT_HTTP} within 5s. ` +
+      "Check nothing else is bound to its ports (SMTP :1025, HTTP :8025).",
+  );
+}
+
+async function mailpitReachable(): Promise<boolean> {
+  try {
+    const res = await fetch(`${MAILPIT_HTTP}/api/v1/messages`);
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**
