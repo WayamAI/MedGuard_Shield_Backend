@@ -58,7 +58,16 @@ jobs:
   - type: openapi
     parameters:
       apiFile: "openapi.json"
-      targetUrl: "http://localhost:4000/api"
+      # Root, not "/api": every path inside openapi.json already starts
+      # with /api (its own servers.url is the relative "/api"), so a
+      # targetUrl that also ends in /api made ZAP request
+      # /api/api/<everything> and 404 on literally every single request —
+      # confirmed in the first real CI run of this plan: 192 "endpoints"
+      # discovered (double the real 97, from some kind of double-counting
+      # artifact of that), 100% of responses 4xx, and both of the two
+      # alerts found pointed at an /api/api/... URL. The scan ran; it just
+      # never touched anything real.
+      targetUrl: "http://localhost:4000"
       context: "Drishti API"
 
   - type: passiveScan-config
