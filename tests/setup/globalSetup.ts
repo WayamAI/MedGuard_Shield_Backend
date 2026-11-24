@@ -46,15 +46,29 @@ export default async function globalSetup() {
  * confusing fetch error.
  */
 async function ensureMailpitRunning(): Promise<void> {
-  if (await mailpitReachable()) return;
+  // Tolerates a CI service container that's still coming up, not just a
+  // local machine with nothing running at all: wait a few seconds before
+  // concluding nothing is there and trying to spawn a local binary (which
+  // doesn't exist as a CI runner concept — CI gets Mailpit as a `services:`
+  // container instead, see .github/workflows/ci.yml).
+  for (let attempt = 0; attempt < 12; attempt++) {
+    if (await mailpitReachable()) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 
-  try {
-    // detached + unref: outlives this process, the same way `mailpit &`
-    // from a shell would, so it stays up across every vitest config this
-    // globalSetup runs for instead of being killed when the first one exits.
+  // detached + unref: outlives this process, the same way `mailpit &` from
+  // a shell would, so it stays up across every vitest config this
+  // globalSetup runs for instead of being killed when the first one exits.
+  // spawn() doesn't throw synchronously for a missing binary — ENOENT
+  // arrives as an async 'error' event — so that's what's awaited below.
+  const spawnFailed = new Promise<boolean>((resolve) => {
     const child = spawn("mailpit", [], { stdio: "ignore", detached: true });
+    child.once("error", () => resolve(true));
+    child.once("spawn", () => resolve(false));
     child.unref();
-  } catch {
+  });
+
+  if (await spawnFailed) {
     throw new Error(
       "Mailpit is not running and the `mailpit` binary was not found. " +
         "Install it with `brew install mailpit`, or start it yourself, then re-run the tests.",

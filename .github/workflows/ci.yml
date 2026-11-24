@@ -19,6 +19,10 @@ jobs:
     # The integration tests hit a real Postgres rather than a mock, so CI
     # needs one. The name carries "test" because tests/setup/globalSetup.ts
     # refuses to run against a database whose name does not.
+    # Postgres and Mailpit both run as GitHub-hosted-runner Docker
+    # containers — the runner has Docker even though the dev machine this
+    # workflow was last edited on does not (see docs/engineering/
+    # VERIFICATION.md's Phase 4 notes on the Testcontainers plan).
     services:
       postgres:
         image: postgres:14
@@ -33,15 +37,27 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # No health-cmd here: unlike postgres:14, mailpit's own image doesn't
+      # reliably ship a tool to probe its own HTTP API with, and it starts
+      # in well under a second anyway — globalSetup.ts's own
+      # ensureMailpitRunning() polls it before any test runs regardless.
+      mailpit:
+        image: axllent/mailpit
+        ports:
+          - 1025:1025
+          - 8025:8025
 
     env:
       DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_test?schema=public
       TEST_DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_test?schema=public
       # demo-reset.test.ts and meridian-seed.test.ts each need their own
       # database (see vitest.demo-reset.config.ts / vitest.meridian-seed.config.ts) —
-      # `npm test` chains all three configs, so CI must provision all three.
+      # `npm test` chains all three configs, and globalSetup.ts now creates
+      # each one itself if it doesn't exist (see that file), so CI doesn't
+      # need a separate "create the database" step any more either.
       DEMO_TEST_DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_demo_test?schema=public
       MERIDIAN_TEST_DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_meridian_test?schema=public
+      MAILPIT_URL: http://localhost:8025
 
     steps:
       - uses: actions/checkout@v5
@@ -64,11 +80,6 @@ jobs:
       # before anything imports it.
       - name: Generate Prisma client
         run: npx prisma generate
-
-      - name: Create demo/meridian test databases
-        run: |
-          PGPASSWORD=medguard psql -h localhost -U medguard -d medguard_test -c 'CREATE DATABASE medguard_demo_test;'
-          PGPASSWORD=medguard psql -h localhost -U medguard -d medguard_test -c 'CREATE DATABASE medguard_meridian_test;'
 
       - name: Typecheck
         run: npm run typecheck
