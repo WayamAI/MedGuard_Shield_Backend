@@ -30,8 +30,14 @@
 env:
   contexts:
     - name: "Drishti API"
+      # The spider job apparently starts from this list, not its own "url"
+      # parameter (confirmed: setting the spider job's url to a real
+      # endpoint had no effect — the log still showed "Job spider
+      # requesting URL http://localhost:4000/api", the bare root, which
+      # 404s). This has to be a real, reachable endpoint for the same
+      # reason the spider job's url did.
       urls:
-        - "http://localhost:4000/api"
+        - "http://localhost:4000/api/assets"
       includePaths:
         - "http://localhost:4000/api/.*"
       excludePaths:
