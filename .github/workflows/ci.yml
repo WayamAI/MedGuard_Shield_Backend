@@ -95,3 +95,86 @@ jobs:
       # clean, and this only needs to run against the primary database.
       - name: Coverage (risk-engine gate)
         run: npm run test:coverage
+
+  zap:
+    name: ZAP baseline/active scan
+    runs-on: ubuntu-latest
+    # Item 6's own instruction: keep this job even where the native scan
+    # can't run (ZAP's brew cask is Gatekeeper-disabled on at least one dev
+    # machine this was built on — see docs/engineering/VERIFICATION.md).
+    # The GitHub-hosted runner has Docker regardless of any dev machine.
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: medguard
+          POSTGRES_PASSWORD: medguard
+          POSTGRES_DB: medguard_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_dev?schema=public
+      JWT_SECRET: a-sufficiently-long-ci-only-signing-key-not-used-anywhere-real
+      DEMO_USER_PASSWORD: a-ci-only-demo-password-1234
+      FRONTEND_ORIGIN: http://localhost:8080
+      PORT: "4000"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild prisma @prisma/engines esbuild
+
+      - name: Generate Prisma client, migrate, seed
+        run: |
+          npx prisma generate
+          npx prisma migrate deploy
+          npm run db:seed
+
+      - name: Start the API in the background
+        run: |
+          npm run build
+          node dist/server.js &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4000/health && exit 0
+            sleep 1
+          done
+          echo "API never became healthy" && exit 1
+
+      - name: Log in and bake the token into the plan
+        run: |
+          TOKEN=$(curl -s http://localhost:4000/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"admin@wayam.ai","password":"'"$DEMO_USER_PASSWORD"'"}' \
+            | node -pe 'JSON.parse(require("fs").readFileSync(0)).data.token')
+          DRISHTI_ZAP_TOKEN="$TOKEN" envsubst '${DRISHTI_ZAP_TOKEN}' \
+            < security/zap/automation-plan.yaml > /tmp/zap-plan.yaml
+
+      - name: Run ZAP
+        run: |
+          docker run --rm --network host \
+            -v /tmp:/zap/wrk/:rw \
+            -v "$GITHUB_WORKSPACE/openapi.json:/zap/wrk/openapi.json:ro" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap.sh -cmd -autorun /zap/wrk/zap-plan.yaml
+
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: /tmp/zap-report.json
+          if-no-files-found: warn

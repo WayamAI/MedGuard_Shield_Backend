@@ -1,0 +1,95 @@
+# ZAP Automation Framework plan for the Drishti API.
+#
+# Run against a locally running instance (npm run build && npm start, or
+# npm run dev), seeded (npm run db:seed), with openapi.json up to date
+# (npm run openapi:generate). Two ways to run it:
+#
+#   Native (brew install --cask zap):
+#     zap.sh -cmd -autorun security/zap/automation-plan.yaml
+#
+#   CI (.github/workflows/zap.yml): the official zaproxy/action-full,
+#   pointed at this same file.
+#
+# Authentication: the API authenticates every mutating route via an
+# Authorization: Bearer header only (see src/middleware/auth.ts) — no
+# session cookie ZAP could just carry forward. The replacer job below
+# injects a fixed bearer token into every request ZAP makes; the CI job
+# fetches that token with a real login call and substitutes it in via
+# envsubst before invoking ZAP (see .github/workflows/zap.yml). Running
+# this natively, export DRISHTI_ZAP_TOKEN yourself first:
+#
+#   export DRISHTI_ZAP_TOKEN=$(curl -s localhost:4000/api/auth/login \
+#     -H 'Content-Type: application/json' \
+#     -d "{\"email\":\"admin@wayam.ai\",\"password\":\"$DEMO_USER_PASSWORD\"}" \
+#     | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["token"])')
+#   envsubst < security/zap/automation-plan.yaml > /tmp/zap-plan.yaml
+#   zap.sh -cmd -autorun /tmp/zap-plan.yaml
+
+env:
+  contexts:
+    - name: "Drishti API"
+      urls:
+        - "http://localhost:4000/api"
+      includePaths:
+        - "http://localhost:4000/api/.*"
+      excludePaths:
+        # Never actively probe the two destructive, demo-only reset paths
+        # from an automated scan.
+        - "http://localhost:4000/api/import/.*"
+        - "http://localhost:4000/api/ingest/.*"
+  parameters:
+    failOnError: true
+    failOnWarning: false
+    progressToStdout: true
+
+jobs:
+  - type: replacer
+    parameters: {}
+    rules:
+      - description: "Bearer auth for every request ZAP makes"
+        url: ""
+        matchType: req_header
+        matchStr: "Authorization"
+        regex: false
+        replacementString: "Bearer ${DRISHTI_ZAP_TOKEN}"
+
+  - type: openapi
+    parameters:
+      apiFile: "openapi.json"
+      targetUrl: "http://localhost:4000/api"
+      context: "Drishti API"
+
+  - type: passiveScan-config
+    parameters:
+      maxBodySizeInBytesToScan: 100000
+
+  - type: spider
+    parameters:
+      context: "Drishti API"
+      url: "http://localhost:4000/api"
+      maxDuration: 5
+
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 5
+
+  - type: activeScan
+    parameters:
+      context: "Drishti API"
+      policy: "Default Policy"
+    # Everything ingest/import can do is already exercised and audited
+    # elsewhere (Phase 3's SECURITY_REVIEW.md, tests/integration/
+    # ingest.test.ts, api-key-scope.test.ts); the context excludePaths
+    # above keep an active scan from fuzzing a bulk-write endpoint.
+
+  - type: report
+    parameters:
+      template: "traditional-json"
+      reportDir: "security/zap"
+      reportFile: "zap-report"
+      reportTitle: "Drishti API — ZAP baseline/active scan"
+    risks:
+      - high
+      - medium
+      - low
+      - info

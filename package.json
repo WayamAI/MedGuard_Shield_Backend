@@ -28,7 +28,7 @@
     "db:seed:bootstrap": "tsx prisma/seed-bootstrap.ts",
     "openapi:generate": "tsx scripts/generate-openapi.ts",
     "db:demo:reset": "tsx prisma/reset-demo.ts",
-    "perf:smoke": "k6 run scripts/k6/smoke.js"
+    "perf:smoke": "set -a && . ./.env && set +a && k6 run scripts/k6/smoke.js"
   },
   "engines": {
     "node": ">=20"
