@@ -31,7 +31,7 @@ apiKeysRouter.post("/", requirePermission("apikey:create"), validate({ body: cre
   }
 });
 
-const idParam = z.object({ id: z.coerce.number().int().positive() });
+export const idParam = z.object({ id: z.coerce.number().int().positive() });
 
 apiKeysRouter.post(
   "/:id/revoke", requirePermission("apikey:revoke"), validate({ params: idParam }),

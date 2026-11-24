@@ -12,8 +12,8 @@ import {
 export const membersRouter = Router();
 
 const ROLES = ["ADMIN", "ANALYST", "VIEWER"] as const;
-const userIdParam = z.object({ userId: z.coerce.number().int().positive() });
-const inviteIdParam = z.object({ inviteId: z.coerce.number().int().positive() });
+export const userIdParam = z.object({ userId: z.coerce.number().int().positive() });
+export const inviteIdParam = z.object({ inviteId: z.coerce.number().int().positive() });
 const inviteBody = z.object({ email: z.string().email(), role: z.enum(ROLES) });
 const roleBody = z.object({ role: z.enum(ROLES) });
 membersRouter.get("/", async (req, res, next) => {

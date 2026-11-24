@@ -373,7 +373,7 @@ authRouter.get("/sessions", requireAuth, async (req, res, next) => {
   }
 });
 
-const sessionIdParam = z.object({ id: z.coerce.number().int().positive() });
+export const sessionIdParam = z.object({ id: z.coerce.number().int().positive() });
 
 authRouter.post("/sessions/:id/revoke", requireAuth, validate({ params: sessionIdParam }), async (req, res, next) => {
   try {

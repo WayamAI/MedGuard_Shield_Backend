@@ -18,4 +18,26 @@ describe("openapi.json matches what the generator would produce right now", () =
     const fresh = JSON.stringify(buildDocument(), null, 2) + "\n";
     expect(fresh, "run `npm run openapi:generate` and commit the result").toBe(committed);
   });
+
+  /**
+   * Regression for a real bug a ZAP CI run caught: several ROUTES entries
+   * had a `{param}` in their path but no `params:` schema, so buildPaths()
+   * never emitted a matching `parameters` entry — an OpenAPI document that
+   * ZAP's own openapi job (correctly) refuses to import, since OpenAPI 3.1
+   * requires every path placeholder to be declared somewhere.
+   */
+  it("declares a path-level parameter for every {placeholder} in every path", () => {
+    const document = buildDocument() as { paths: Record<string, Record<string, { parameters?: Array<{ name: string; in: string }> }>> };
+    const problems: string[] = [];
+    for (const [path, methods] of Object.entries(document.paths)) {
+      const declaredInPath = new Set([...path.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!));
+      for (const [method, op] of Object.entries(methods)) {
+        const paramsHere = new Set((op.parameters ?? []).filter((p) => p.in === "path").map((p) => p.name));
+        for (const name of declaredInPath) {
+          if (!paramsHere.has(name)) problems.push(`${method.toUpperCase()} ${path}: missing path param "${name}"`);
+        }
+      }
+    }
+    expect(problems).toEqual([]);
+  });
 });

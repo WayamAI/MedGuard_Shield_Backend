@@ -15,11 +15,14 @@ import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { z, type ZodType } from "zod";
 import * as access from "../src/routes/access.js";
+import * as apiKeys from "../src/routes/apiKeys.js";
 import * as assets from "../src/routes/assets.js";
 import * as auth from "../src/routes/auth.js";
 import * as controls from "../src/routes/controls.js";
 import * as dataflows from "../src/routes/dataflows.js";
 import * as identities from "../src/routes/identities.js";
+import * as members from "../src/routes/members.js";
+import * as notifications from "../src/routes/notifications.js";
 import * as organization from "../src/routes/organization.js";
 import * as phiTypes from "../src/routes/phiInventory.js";
 import * as policies from "../src/routes/policies.js";
@@ -49,6 +52,12 @@ type RouteSpec = {
   response?: ZodType;
 };
 
+// import.ts reads :entity straight off req.params with no validate()
+// middleware (requireSpec() does its own lookup/404), so there is no
+// existing Zod schema to import for it; same for ingest.ts's :recordType.
+const entityParam = z.object({ entity: z.string() });
+const recordTypeParam = z.object({ recordType: z.string() });
+
 const ROUTES: RouteSpec[] = [
   { method: "post", path: "/auth/login", tag: "Auth", summary: "Log in (may require a second call with mfaCode)", auth: "public", body: auth.loginBody },
   { method: "post", path: "/auth/refresh", tag: "Auth", summary: "Rotate the refresh token", auth: "session" },
@@ -63,16 +72,16 @@ const ROUTES: RouteSpec[] = [
   { method: "post", path: "/auth/mfa/confirm", tag: "Auth", summary: "Confirm enrollment, receive recovery codes", auth: "session" },
   { method: "post", path: "/auth/mfa/disable", tag: "Auth", summary: "Disable MFA (password + code)", auth: "session" },
   { method: "get", path: "/auth/sessions", tag: "Auth", summary: "List active sessions", auth: "session" },
-  { method: "post", path: "/auth/sessions/{id}/revoke", tag: "Auth", summary: "Revoke one session", auth: "session" },
+  { method: "post", path: "/auth/sessions/{id}/revoke", tag: "Auth", summary: "Revoke one session", auth: "session", params: auth.sessionIdParam },
   { method: "post", path: "/auth/sessions/revoke-others", tag: "Auth", summary: "Revoke every other session", auth: "session" },
 
   { method: "get", path: "/members", tag: "Members", summary: "List organization members", auth: "session" },
   { method: "post", path: "/members/invites", tag: "Members", summary: "Invite a member (ADMIN only)", auth: "session" },
-  { method: "post", path: "/members/invites/{inviteId}/resend", tag: "Members", summary: "Resend an invite (ADMIN only)", auth: "session" },
-  { method: "delete", path: "/members/invites/{inviteId}", tag: "Members", summary: "Revoke an invite (ADMIN only)", auth: "session" },
-  { method: "patch", path: "/members/{userId}/role", tag: "Members", summary: "Change a member's role (ADMIN only)", auth: "session" },
-  { method: "post", path: "/members/{userId}/deactivate", tag: "Members", summary: "Deactivate a member (ADMIN only)", auth: "session" },
-  { method: "post", path: "/members/{userId}/reactivate", tag: "Members", summary: "Reactivate a member (ADMIN only)", auth: "session" },
+  { method: "post", path: "/members/invites/{inviteId}/resend", tag: "Members", summary: "Resend an invite (ADMIN only)", auth: "session", params: members.inviteIdParam },
+  { method: "delete", path: "/members/invites/{inviteId}", tag: "Members", summary: "Revoke an invite (ADMIN only)", auth: "session", params: members.inviteIdParam },
+  { method: "patch", path: "/members/{userId}/role", tag: "Members", summary: "Change a member's role (ADMIN only)", auth: "session", params: members.userIdParam },
+  { method: "post", path: "/members/{userId}/deactivate", tag: "Members", summary: "Deactivate a member (ADMIN only)", auth: "session", params: members.userIdParam },
+  { method: "post", path: "/members/{userId}/reactivate", tag: "Members", summary: "Reactivate a member (ADMIN only)", auth: "session", params: members.userIdParam },
 
   { method: "get", path: "/organization", tag: "Organization", summary: "Current organization", auth: "session" },
   { method: "get", path: "/organization/members", tag: "Organization", summary: "List members", auth: "session" },
@@ -171,18 +180,18 @@ const ROUTES: RouteSpec[] = [
   { method: "get", path: "/reports/risk-assessment.csv", tag: "Reports", summary: "Risk assessment report, top risks (CSV)", auth: "session" },
 
   { method: "get", path: "/import", tag: "Import", summary: "List importable entities (ADMIN only)", auth: "session" },
-  { method: "get", path: "/import/{entity}/template", tag: "Import", summary: "Download a CSV template (ADMIN only)", auth: "session" },
-  { method: "post", path: "/import/{entity}/validate", tag: "Import", summary: "Validate a CSV without committing (ADMIN only)", auth: "session" },
-  { method: "post", path: "/import/{entity}", tag: "Import", summary: "Import a CSV (ADMIN only)", auth: "session" },
+  { method: "get", path: "/import/{entity}/template", tag: "Import", summary: "Download a CSV template (ADMIN only)", auth: "session", params: entityParam },
+  { method: "post", path: "/import/{entity}/validate", tag: "Import", summary: "Validate a CSV without committing (ADMIN only)", auth: "session", params: entityParam },
+  { method: "post", path: "/import/{entity}", tag: "Import", summary: "Import a CSV (ADMIN only)", auth: "session", params: entityParam },
 
   { method: "get", path: "/api-keys", tag: "Ingest", summary: "List ingestion API keys (ADMIN only)", auth: "session" },
   { method: "post", path: "/api-keys", tag: "Ingest", summary: "Create an ingestion API key, secret shown once (ADMIN only)", auth: "session" },
-  { method: "post", path: "/api-keys/{id}/revoke", tag: "Ingest", summary: "Revoke an ingestion API key (ADMIN only)", auth: "session" },
-  { method: "post", path: "/ingest/{recordType}", tag: "Ingest", summary: "Ingest JSON rows (X-API-Key header, not a session)", auth: "public" },
+  { method: "post", path: "/api-keys/{id}/revoke", tag: "Ingest", summary: "Revoke an ingestion API key (ADMIN only)", auth: "session", params: apiKeys.idParam },
+  { method: "post", path: "/ingest/{recordType}", tag: "Ingest", summary: "Ingest JSON rows (X-API-Key header, not a session)", auth: "public", params: recordTypeParam },
 
   { method: "get", path: "/notifications", tag: "Notifications", summary: "List notifications", auth: "session" },
   { method: "get", path: "/notifications/unread-count", tag: "Notifications", summary: "Unread count", auth: "session" },
-  { method: "post", path: "/notifications/{id}/read", tag: "Notifications", summary: "Mark one read", auth: "session" },
+  { method: "post", path: "/notifications/{id}/read", tag: "Notifications", summary: "Mark one read", auth: "session", params: notifications.idParam },
   { method: "post", path: "/notifications/read-all", tag: "Notifications", summary: "Mark all read", auth: "session" },
 
   { method: "get", path: "/phi-inventory", tag: "PHI Inventory", summary: "PHI categories, holding systems, and volumes", auth: "session" },

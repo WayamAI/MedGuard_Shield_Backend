@@ -27,7 +27,7 @@ notificationsRouter.get("/unread-count", async (req, res, next) => {
   }
 });
 
-const idParam = z.object({ id: z.coerce.number().int().positive() });
+export const idParam = z.object({ id: z.coerce.number().int().positive() });
 
 notificationsRouter.post("/:id/read", validate({ params: idParam }), async (req, res, next) => {
   try {
