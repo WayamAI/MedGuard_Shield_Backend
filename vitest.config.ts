@@ -50,12 +50,24 @@ export default defineConfig({
       reporter: ["text", "html"],
       include: ["src/**/*.ts"],
       exclude: ["src/**/*.test.ts", "src/generated/**"],
-      // The risk-scoring engine is the one place a silent regression changes
-      // a customer-facing number; everything else is covered by the broader
-      // route/service integration tests but not held to a numeric floor yet.
       thresholds: {
+        // Overall floor — locks in where the suite already stands rather
+        // than being aspirational; a real drop below this is a real
+        // regression, not noise.
+        lines: 85,
+        statements: 85,
+        // The risk-scoring engine is the one place a silent regression
+        // changes a customer-facing number.
         "src/services/riskScoring.ts": { statements: 100, branches: 100 },
         "src/services/riskFactors.ts": { statements: 100, branches: 100 },
+        // Services as a group, not file-by-file — a handful of files
+        // (controlService.ts, memberService.ts, identityService.ts,
+        // dataFlowService.ts) sit in the 65-80% range individually; see
+        // VERIFICATION.md for the specific gaps. Glob thresholds in vitest's
+        // v8 provider are evaluated as an aggregate across every matched
+        // file, which is what lets this assert the group floor without
+        // failing on those lower individual files.
+        "src/services/**/*.ts": { lines: 90 },
       },
     },
   },

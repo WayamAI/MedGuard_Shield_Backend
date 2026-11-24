@@ -93,13 +93,13 @@ To regenerate: re-run the grep this was built from —
 | POST | `/api/controls/:id/archive` | `control:archive` (ADMIN) | yes | yes | `lifecycle.test.ts` |
 | PUT | `/api/controls/:id/assets/:assetId` | `control:link-asset` (ADMIN) | yes | yes | `lifecycle.test.ts` |
 | DELETE | `/api/controls/:id/assets/:assetId` | `control:link-asset` (ADMIN) | yes | yes | `lifecycle.test.ts` |
-| GET | `/api/policies` | read (all roles) | yes | no | `routes.test.ts` |
-| GET | `/api/policies/:id` | read (all roles) | yes | no | `tenancy.test.ts` |
-| POST | `/api/policies` | `policy:create` (ADMIN) | yes | yes | `lifecycle.test.ts` |
-| PATCH | `/api/policies/:id` | `policy:update` (ADMIN) | yes | yes | `lifecycle.test.ts` |
-| POST | `/api/policies/:id/archive` | `policy:archive` (ADMIN) | yes | yes | `lifecycle.test.ts` |
-| PUT | `/api/policies/:id/controls/:controlId` | `policy:link-control` (ADMIN) | yes | yes | `lifecycle.test.ts` |
-| DELETE | `/api/policies/:id/controls/:controlId` | `policy:link-control` (ADMIN) | yes | yes | `lifecycle.test.ts` |
+| GET | `/api/policies` | read (all roles) | yes | no | `routes.test.ts`, `policies.test.ts` |
+| GET | `/api/policies/:id` | read (all roles) | yes | no | `tenancy.test.ts`, `policies.test.ts` |
+| POST | `/api/policies` | `policy:create` (ADMIN) | yes | yes | `policies.test.ts` |
+| PATCH | `/api/policies/:id` | `policy:update` (ADMIN) | yes | yes | `policies.test.ts` |
+| POST | `/api/policies/:id/archive` | `policy:archive` (ADMIN) | yes | yes | `policies.test.ts` |
+| PUT | `/api/policies/:id/controls/:controlId` | `policy:link-control` (ADMIN) | yes | yes | `policies.test.ts` |
+| DELETE | `/api/policies/:id/controls/:controlId` | `policy:link-control` (ADMIN) | yes | yes | `policies.test.ts` |
 | GET | `/api/remediations` | read (all roles) | yes | no | `routes.test.ts` |
 | GET | `/api/remediations/summary` | read (all roles) | yes | no | `discovery.test.ts` |
 | GET | `/api/remediations/:id` | read (all roles) | yes | no | `tenancy.test.ts` |
