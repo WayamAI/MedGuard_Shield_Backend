@@ -34,15 +34,15 @@ describe("POST /api/auth/login", () => {
     expect(session.refreshToken).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("sets both tokens as httpOnly cookies", async () => {
+  it("sets only the refresh token as an httpOnly cookie, never the access token", async () => {
     const res = await request(app)
       .post("/api/auth/login")
       .send({ email: "admin@test.local", password: "test-password" });
 
     const cookies = (res.headers["set-cookie"] ?? []) as unknown as string[];
     const joined = cookies.join("; ");
-    expect(joined).toContain("drishti_token=");
     expect(joined).toContain("drishti_refresh=");
+    expect(joined).not.toContain("drishti_token=");
     expect(cookies.every((c) => c.includes("HttpOnly"))).toBe(true);
   });
 
@@ -239,19 +239,27 @@ describe("CSRF protection on cookie-authenticated endpoints", () => {
   });
 });
 
-describe("the legacy cookie still authenticates", () => {
+describe("neither access-token cookie name authenticates", () => {
   /**
-   * A browser holding a MedGuard-era session must not be silently logged out
-   * by the rename. The old name is accepted on the way in and never set.
+   * CSRF regression (see middleware/auth.ts's extractToken): a cookie is sent
+   * automatically on a cross-site request, so the access token must work
+   * only via the Authorization header. Covers both the current and the
+   * pre-rename cookie name — logout still clears both for hygiene, but
+   * neither is ever read as credentials any more.
    */
-  it("accepts medguard_token for an otherwise valid access token", async () => {
+  it("rejects the current access-token cookie name", async () => {
     const session = await login();
 
-    const res = await request(app)
-      .get("/api/auth/me")
-      .set("Cookie", `medguard_token=${session.token}`);
+    const res = await request(app).get("/api/auth/me").set("Cookie", `drishti_token=${session.token}`);
 
-    expect(res.status).toBe(200);
-    expect(res.body.data.email).toBe("admin@test.local");
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects the legacy access-token cookie name", async () => {
+    const session = await login();
+
+    const res = await request(app).get("/api/auth/me").set("Cookie", `medguard_token=${session.token}`);
+
+    expect(res.status).toBe(401);
   });
 });

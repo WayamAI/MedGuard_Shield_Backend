@@ -8,7 +8,7 @@ import {
 import { ok } from "../lib/http.js";
 import { recordAuthEvent, recordAuthEventSafe } from "../services/auditService.js";
 import {
-  ACCESS_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS,
+  REFRESH_TOKEN_TTL_SECONDS,
   login, MfaRequiredError, refreshSession, revokeAllRefreshTokens, revokeRefreshToken,
   type SessionResult,
 } from "../services/authService.js";
@@ -55,8 +55,15 @@ function cookieOptions(maxAgeSeconds: number) {
   };
 }
 
+/**
+ * Only the refresh credential is ever a cookie. The access token is returned
+ * in the response body only (see sessionBody below) and must live in memory
+ * on the client — a cookie-borne access token would be sent automatically on
+ * every cross-site request, and unlike refresh/logout there is no practical
+ * way to require a custom CSRF header on every one of the ~50 other mutating
+ * routes. See middleware/auth.ts's extractToken for the enforcement side.
+ */
 function setSessionCookies(res: Parameters<typeof ok>[0], session: SessionResult): void {
-  res.cookie?.(ACCESS_COOKIE, session.token, cookieOptions(ACCESS_TOKEN_TTL_SECONDS));
   res.cookie?.(REFRESH_COOKIE, session.refreshToken, cookieOptions(REFRESH_TOKEN_TTL_SECONDS));
 }
 
