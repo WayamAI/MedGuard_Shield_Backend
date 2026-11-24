@@ -77,7 +77,14 @@ jobs:
   - type: spider
     parameters:
       context: "Drishti API"
-      url: "http://localhost:4000/api"
+      # A real endpoint, not the bare "/api" root — there is no GET /api
+      # handler (every route is mounted at /api/<something>), so the spider
+      # 404s on its very first request otherwise. Confirmed live: this was
+      # the one real cause left behind an otherwise-clean CI run (exit code
+      # 2, "Job spider error accessing URL http://localhost:4000/api status
+      # code returned: 404 expected 200" in the automation plan's own
+      # warnings) once the /api-doubling bug above was fixed.
+      url: "http://localhost:4000/api/assets"
       maxDuration: 5
 
   - type: passiveScan-wait
