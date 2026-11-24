@@ -267,7 +267,13 @@ export function buildDocument() {
         "Healthcare PHI risk intelligence platform API. Generated from the Zod " +
         "schemas that validate every route — see scripts/generate-openapi.ts.",
     },
-    servers: [{ url: "/api" }],
+    // Root, not "/api": every path key below already includes the /api
+    // prefix (buildPaths() builds them as `/api${route.path}`), so a
+    // servers.url of "/api" too would make any spec-compliant client
+    // resolve a doubled /api/api/... — exactly what happened the first
+    // time this spec was actually fed to a real OpenAPI consumer (ZAP's
+    // openapi job; see security/zap/automation-plan.yaml's history).
+    servers: [{ url: "/" }],
     components: {
       securitySchemes: {
         sessionCookie: {

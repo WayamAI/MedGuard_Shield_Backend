@@ -40,4 +40,19 @@ describe("openapi.json matches what the generator would produce right now", () =
     }
     expect(problems).toEqual([]);
   });
+
+  /**
+   * Regression for a real bug the first real ZAP CI run caught: servers[0]
+   * was "/api", and every path key already starts with "/api" too (buildPaths
+   * builds them as `/api${route.path}`) — any spec-compliant client resolves
+   * server.url + path, so that doubled every single request to
+   * /api/api/..., which 404s. Confirmed live: ZAP's own scan reported 100%
+   * of responses as 4xx before this was fixed. The root must be relative
+   * (not also "/api"), since the paths already carry the full prefix.
+   */
+  it("does not double the /api prefix between servers[0].url and the paths", () => {
+    const document = buildDocument() as { servers: Array<{ url: string }>; paths: Record<string, unknown> };
+    expect(document.servers[0]?.url).not.toMatch(/\/api/);
+    expect(Object.keys(document.paths).every((p) => p.startsWith("/api/"))).toBe(true);
+  });
 });
