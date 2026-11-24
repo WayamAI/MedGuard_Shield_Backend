@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { pathToFileURL } from "node:url";
 import type {
   AccessLevel, AssetType, BaaStatus, IdentityKind, Sensitivity,
   ThreatSeverity, ThreatStatus,
@@ -738,7 +739,7 @@ export async function main() {
 // Only auto-run when invoked directly (`npm run db:seed`), not when imported
 // — `tests/integration/meridian-seed.test.ts` imports `main` to exercise this
 // script's output without triggering a second run or an unwanted disconnect.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
     .catch((err) => {
       console.error("[seed] failed:", err);

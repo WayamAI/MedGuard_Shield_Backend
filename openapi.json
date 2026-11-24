@@ -954,7 +954,192 @@
         ],
         "responses": {
           "200": {
-            "description": "Success"
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "EHR",
+                              "DATABASE",
+                              "API",
+                              "CLOUD_STORAGE",
+                              "ANALYTICS",
+                              "OTHER"
+                            ]
+                          },
+                          "phiVolume": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "encrypted": {
+                            "type": "boolean"
+                          },
+                          "mfaEnabled": {
+                            "type": "boolean"
+                          },
+                          "lastAssessedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "archivedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "risk": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "score": {
+                                    "type": "number"
+                                  },
+                                  "band": {
+                                    "type": "string",
+                                    "enum": [
+                                      "LOW",
+                                      "MODERATE",
+                                      "HIGH",
+                                      "CRITICAL",
+                                      "EXTREME"
+                                    ]
+                                  },
+                                  "computedAt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "score",
+                                  "band",
+                                  "computedAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "counts": {
+                            "type": "object",
+                            "properties": {
+                              "phiTypes": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "flows": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "accessGrants": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "openThreats": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "controls": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "phiTypes",
+                              "flows",
+                              "accessGrants",
+                              "openThreats",
+                              "controls"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "type",
+                          "phiVolume",
+                          "encrypted",
+                          "mfaEnabled",
+                          "lastAssessedAt",
+                          "createdAt",
+                          "archivedAt",
+                          "risk",
+                          "counts"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "pageSize": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "total": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "totalPages": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "page",
+                        "pageSize",
+                        "total",
+                        "totalPages"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "400": {
             "description": "Validation error"

@@ -12,6 +12,7 @@
  */
 import "dotenv/config";
 import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { z, type ZodType } from "zod";
 import * as access from "../src/routes/access.js";
 import * as assets from "../src/routes/assets.js";
@@ -28,6 +29,7 @@ import * as search from "../src/routes/search.js";
 import * as threats from "../src/routes/threats.js";
 import * as vendors from "../src/routes/vendors.js";
 import { paginationQuery } from "../src/lib/pagination.js";
+import { assetListResponseSchema } from "../src/schemas/responses.js";
 
 type RouteSpec = {
   method: "get" | "post" | "patch" | "put" | "delete";
@@ -38,6 +40,13 @@ type RouteSpec = {
   params?: ZodType;
   query?: ZodType;
   body?: ZodType;
+  /**
+   * Optional 200-response schema. Most routes don't have one yet — see
+   * src/schemas/responses.ts's header comment for scope — so `responses`
+   * falls back to the bare `{ description: "Success" }` it always had when
+   * this is absent.
+   */
+  response?: ZodType;
 };
 
 const ROUTES: RouteSpec[] = [
@@ -70,7 +79,7 @@ const ROUTES: RouteSpec[] = [
   { method: "get", path: "/organization/settings", tag: "Organization", summary: "Configurable thresholds", auth: "session" },
   { method: "patch", path: "/organization/settings", tag: "Organization", summary: "Update thresholds (ADMIN only)", auth: "session", body: organization.settingsBody },
 
-  { method: "get", path: "/assets", tag: "Assets", summary: "List assets", auth: "session", query: assets.listQuery },
+  { method: "get", path: "/assets", tag: "Assets", summary: "List assets", auth: "session", query: assets.listQuery, response: assetListResponseSchema },
   { method: "get", path: "/assets/{id}", tag: "Assets", summary: "Get an asset", auth: "session", params: assets.idParam },
   { method: "post", path: "/assets", tag: "Assets", summary: "Create an asset", auth: "session", body: assets.createBody },
   { method: "patch", path: "/assets/{id}", tag: "Assets", summary: "Update an asset", auth: "session", params: assets.idParam, body: assets.patchBody },
@@ -226,7 +235,9 @@ function buildPaths() {
         ? { requestBody: { required: true, content: { "application/json": { schema: schemaRef(route.body) } } } }
         : {}),
       responses: {
-        "200": { description: "Success" },
+        "200": route.response
+          ? { description: "Success", content: { "application/json": { schema: schemaRef(route.response) } } }
+          : { description: "Success" },
         "400": { description: "Validation error" },
         "401": { description: "Not authenticated" },
         "403": { description: "Not permitted" },
@@ -262,7 +273,7 @@ export function buildDocument() {
   };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const document = buildDocument();
   writeFileSync("openapi.json", JSON.stringify(document, null, 2) + "\n");
   console.log(`[openapi] wrote openapi.json — ${Object.keys(document.paths).length} paths`);

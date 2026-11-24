@@ -12,6 +12,7 @@
  * tenant's first boot should never fake.
  */
 import "dotenv/config";
+import { pathToFileURL } from "node:url";
 import { prisma } from "../src/lib/prisma.js";
 import { hashPassword } from "../src/services/authService.js";
 
@@ -50,7 +51,7 @@ export async function main() {
   console.log(`[seed:bootstrap] org "${org.name}" (${org.slug}), admin ${adminEmail}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main()
     .catch((err) => {
       console.error(err);
