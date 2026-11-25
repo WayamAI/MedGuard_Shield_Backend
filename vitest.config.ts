@@ -26,7 +26,7 @@ Object.assign(process.env, TEST_ENV);
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "tests/**/*.test.ts", "scripts/**/*.test.ts"],
     // demo-reset.test.ts needs a database whose name contains "demo" (it
     // exercises the audit trigger's DELETE exception and reset-demo.ts's own
     // "demo" guard) — see vitest.demo-reset.config.ts, run separately by
