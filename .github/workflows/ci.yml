@@ -103,6 +103,13 @@ jobs:
       # the specific failure mode has its own clearly-named CI step rather
       # than being buried in a 1000+-test run's output.
       - name: OpenAPI freshness
+        # src/config.ts validates env vars eagerly at import time, and the
+        # generator imports route files that pull it in transitively — the
+        # job's own env: block above only sets DB-related vars (npm test's
+        # per-config env is what supplies the rest normally), so this step
+        # needs its own JWT_SECRET to get past that validation.
+        env:
+          JWT_SECRET: a-sufficiently-long-ci-only-signing-key-not-used-anywhere-real
         run: |
           npm run openapi:generate
           git diff --exit-code openapi.json || \
@@ -153,6 +160,7 @@ jobs:
             drishti-api:build npx prisma migrate deploy
           docker run --rm --network host \
             -e DATABASE_URL="$DATABASE_URL" -e DEMO_USER_PASSWORD="$DEMO_USER_PASSWORD" \
+            -e JWT_SECRET="$JWT_SECRET" -e FRONTEND_ORIGIN="$FRONTEND_ORIGIN" \
             drishti-api:build npm run db:seed
 
       - name: Run the runtime image
