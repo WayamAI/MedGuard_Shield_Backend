@@ -154,13 +154,34 @@ jobs:
           done
           echo "API never became healthy" && exit 1
 
-      - name: Log in and bake the token into the plan
+      - name: Log in, fetch real resource ids, bake both into the plan
         run: |
           TOKEN=$(curl -s http://localhost:4000/api/auth/login \
             -H 'Content-Type: application/json' \
             -d '{"email":"admin@wayam.ai","password":"'"$DEMO_USER_PASSWORD"'"}' \
             | node -pe 'JSON.parse(require("fs").readFileSync(0)).data.token')
-          DRISHTI_ZAP_TOKEN="$TOKEN" envsubst '${DRISHTI_ZAP_TOKEN}' \
+
+          # Real ids from the seeded Meridian data, not ZAP's own placeholder
+          # path-param defaults — without this, ID-scoped routes 404 on
+          # whatever ZAP guesses and the active scan never reaches their
+          # real logic (see docs/engineering/SECURITY_REVIEW.md's ZAP
+          # section for the scan-coverage gap this closes).
+          id_of() {
+            curl -s "http://localhost:4000/api/$1" -H "Authorization: Bearer $TOKEN" \
+              | node -pe "JSON.parse(require('fs').readFileSync(0)).data[0].id"
+          }
+          export DRISHTI_ZAP_TOKEN="$TOKEN"
+          export DRISHTI_ASSET_ID=$(id_of assets)
+          export DRISHTI_VENDOR_ID=$(id_of vendors)
+          export DRISHTI_IDENTITY_ID=$(id_of identities)
+          export DRISHTI_THREAT_ID=$(id_of threats)
+          export DRISHTI_CONTROL_ID=$(id_of controls)
+          export DRISHTI_POLICY_ID=$(id_of policies)
+          export DRISHTI_REMEDIATION_ID=$(id_of remediations)
+          export DRISHTI_ACCESS_ID=$(id_of access)
+          export DRISHTI_PHITYPE_ID=$(id_of phi-types)
+
+          envsubst '${DRISHTI_ZAP_TOKEN} ${DRISHTI_ASSET_ID} ${DRISHTI_VENDOR_ID} ${DRISHTI_IDENTITY_ID} ${DRISHTI_THREAT_ID} ${DRISHTI_CONTROL_ID} ${DRISHTI_POLICY_ID} ${DRISHTI_REMEDIATION_ID} ${DRISHTI_ACCESS_ID} ${DRISHTI_PHITYPE_ID}' \
             < security/zap/automation-plan.yaml > /tmp/zap-plan.yaml
 
       - name: Run ZAP
@@ -173,7 +194,7 @@ jobs:
 
       - name: Upload ZAP report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: zap-report
           path: /tmp/zap-report.json

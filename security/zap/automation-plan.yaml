@@ -17,13 +17,19 @@
 # session cookie ZAP could just carry forward. The replacer job below
 # injects a fixed bearer token into every request ZAP makes; the CI job
 # fetches that token with a real login call and substitutes it in via
-# envsubst before invoking ZAP (see .github/workflows/zap.yml). Running
-# this natively, export DRISHTI_ZAP_TOKEN yourself first:
+# envsubst before invoking ZAP (see .github/workflows/ci.yml's `zap` job).
+# That same step also fetches one real id per entity type (DRISHTI_ASSET_ID,
+# DRISHTI_VENDOR_ID, ...) for the `requestor` job below. Running this
+# natively, export all of them yourself first:
 #
-#   export DRISHTI_ZAP_TOKEN=$(curl -s localhost:4000/api/auth/login \
+#   TOKEN=$(curl -s localhost:4000/api/auth/login \
 #     -H 'Content-Type: application/json' \
 #     -d "{\"email\":\"admin@wayam.ai\",\"password\":\"$DEMO_USER_PASSWORD\"}" \
 #     | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["token"])')
+#   export DRISHTI_ZAP_TOKEN="$TOKEN"
+#   export DRISHTI_ASSET_ID=1 DRISHTI_VENDOR_ID=1 DRISHTI_IDENTITY_ID=1 \
+#          DRISHTI_THREAT_ID=1 DRISHTI_CONTROL_ID=1 DRISHTI_POLICY_ID=1 \
+#          DRISHTI_REMEDIATION_ID=1 DRISHTI_ACCESS_ID=1 DRISHTI_PHITYPE_ID=1
 #   envsubst < security/zap/automation-plan.yaml > /tmp/zap-plan.yaml
 #   zap.sh -cmd -autorun /tmp/zap-plan.yaml
 
@@ -92,6 +98,30 @@ jobs:
       # warnings) once the /api-doubling bug above was fixed.
       url: "http://localhost:4000/api/assets"
       maxDuration: 5
+
+  # ID-scoped routes (GET/PATCH/.../:id) otherwise only ever see whatever
+  # placeholder id ZAP's openapi importer defaults path params to, which
+  # almost never exists in the seeded data and 404s before the active
+  # scanner's injection rules ever reach the handler's real logic. These
+  # requests use real ids from the seeded Meridian data (CI fetches them
+  # live after seeding — see .github/workflows/ci.yml's "Log in, fetch
+  # real resource ids" step; running natively, export the same
+  # DRISHTI_*_ID vars yourself first) so ZAP's history — and therefore the
+  # active scan that follows — actually includes a reachable 200 for each
+  # entity type, not just the list endpoints.
+  - type: requestor
+    parameters:
+      user: ""
+    requests:
+      - url: "http://localhost:4000/api/assets/${DRISHTI_ASSET_ID}"
+      - url: "http://localhost:4000/api/vendors/${DRISHTI_VENDOR_ID}"
+      - url: "http://localhost:4000/api/identities/${DRISHTI_IDENTITY_ID}"
+      - url: "http://localhost:4000/api/threats/${DRISHTI_THREAT_ID}"
+      - url: "http://localhost:4000/api/controls/${DRISHTI_CONTROL_ID}"
+      - url: "http://localhost:4000/api/policies/${DRISHTI_POLICY_ID}"
+      - url: "http://localhost:4000/api/remediations/${DRISHTI_REMEDIATION_ID}"
+      - url: "http://localhost:4000/api/access/${DRISHTI_ACCESS_ID}"
+      - url: "http://localhost:4000/api/phi-types/${DRISHTI_PHITYPE_ID}"
 
   - type: passiveScan-wait
     parameters:
