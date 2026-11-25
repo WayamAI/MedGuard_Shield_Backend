@@ -96,6 +96,94 @@ jobs:
       - name: Coverage (risk-engine gate)
         run: npm run test:coverage
 
+      # openapi.json is committed, hand-curated-feeling output that's
+      # actually generated — nothing stops someone from editing a route's
+      # Zod schema and forgetting to regenerate it. tests/openapi-contract.test.ts
+      # already catches this inside `npm test` above; this step exists so
+      # the specific failure mode has its own clearly-named CI step rather
+      # than being buried in a 1000+-test run's output.
+      - name: OpenAPI freshness
+        run: |
+          npm run openapi:generate
+          git diff --exit-code openapi.json || \
+            (echo "::error::openapi.json is stale — run 'npm run openapi:generate' and commit the result" && exit 1)
+
+  docker:
+    name: Docker image build + smoke test
+    runs-on: ubuntu-latest
+    # Item C's own instruction: this is the one piece of "Docker" that has
+    # to run somewhere, since the dev machine this was built on has no
+    # working Docker daemon (see docs/engineering/VERIFICATION.md) — the
+    # GitHub-hosted runner does.
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: medguard
+          POSTGRES_PASSWORD: medguard
+          POSTGRES_DB: medguard_docker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://medguard:medguard@localhost:5432/medguard_docker?schema=public
+      JWT_SECRET: a-sufficiently-long-ci-only-signing-key-not-used-anywhere-real
+      DEMO_USER_PASSWORD: a-ci-only-demo-password-1234
+      FRONTEND_ORIGIN: http://localhost:8080
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the runtime image
+        run: docker build --target runner -t drishti-api:ci .
+
+      # Migrations are deliberately NOT run by the image's own CMD (see the
+      # Dockerfile's comment) — they're a release step, run here the same
+      # way DEPLOYMENT.md and docker-compose.yml's `migrate` service do: the
+      # `build` stage still has the Prisma CLI, the `runner` stage doesn't.
+      - name: Migrate and seed, via the build stage
+        run: |
+          docker build --target build -t drishti-api:build .
+          docker run --rm --network host -e DATABASE_URL="$DATABASE_URL" \
+            drishti-api:build npx prisma migrate deploy
+          docker run --rm --network host \
+            -e DATABASE_URL="$DATABASE_URL" -e DEMO_USER_PASSWORD="$DEMO_USER_PASSWORD" \
+            drishti-api:build npm run db:seed
+
+      - name: Run the runtime image
+        run: |
+          docker run -d --network host --name drishti-api-ci \
+            -e DATABASE_URL="$DATABASE_URL" -e JWT_SECRET="$JWT_SECRET" \
+            -e FRONTEND_ORIGIN="$FRONTEND_ORIGIN" -e DEMO_USER_PASSWORD="$DEMO_USER_PASSWORD" \
+            -e PORT=4000 \
+            drishti-api:ci
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4000/healthz && exit 0
+            sleep 1
+          done
+          docker logs drishti-api-ci
+          echo "container never became healthy" && exit 1
+
+      - name: Smoke test
+        run: |
+          curl -sf http://localhost:4000/healthz
+          curl -sf http://localhost:4000/readyz
+          TOKEN=$(curl -s http://localhost:4000/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"admin@wayam.ai","password":"'"$DEMO_USER_PASSWORD"'"}' \
+            | node -pe 'JSON.parse(require("fs").readFileSync(0)).data.token')
+          test -n "$TOKEN"
+          curl -sf http://localhost:4000/api/auth/me -H "Authorization: Bearer $TOKEN" | grep -q admin@wayam.ai
+
+      - name: Container logs
+        if: always()
+        run: docker logs drishti-api-ci || true
+
   zap:
     name: ZAP baseline/active scan
     runs-on: ubuntu-latest
