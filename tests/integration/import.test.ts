@@ -573,11 +573,10 @@ describe("file handling safety", () => {
 
   it("rejects an .xlsx file over the 2MB limit with 413", async () => {
     // xlsx is a zip, so the padding has to be incompressible (true random
-    // bytes, not a repeated pattern) to actually push the file past 2MB.
-    const rows = Array.from({ length: 2000 }, (_, i) => [
-      `Asset ${i} ${randomBytes(2000).toString("hex")}`, "API", 1, true, true,
-    ]);
-    const buffer = await rowsToXlsx(ASSET_HEADER.split(","), rows);
+    // bytes, not a repeated pattern) to actually push the file past 2MB. One
+    // oversized cell keeps both the row count and the compression work small.
+    const pad = randomBytes(2.2 * 1024 * 1024).toString("hex");
+    const buffer = await rowsToXlsx(ASSET_HEADER.split(","), [[`Asset ${pad}`, "API", 1, true, true]]);
     expect(buffer.byteLength).toBeGreaterThan(2 * 1024 * 1024);
 
     const res = await doImportXlsx("assets", buffer);
