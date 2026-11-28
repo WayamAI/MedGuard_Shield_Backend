@@ -3,18 +3,16 @@ import { prisma } from "../lib/prisma.js";
 import { ConflictError, NotFoundError } from "../lib/errors.js";
 import { scope, type TenantContext } from "../lib/tenant.js";
 import { isUniqueViolation } from "./assetService.js";
-
-/** Vendors are expected to be reassessed annually. */
-const ASSESSMENT_INTERVAL_DAYS = 365;
+import { getOrgSettings } from "./orgSettingsService.js";
 
 function daysSince(date: Date | null): number | null {
   if (!date) return null;
   return Math.floor((Date.now() - date.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-function assessmentOverdue(lastAssessedAt: Date | null): boolean {
+function assessmentOverdue(lastAssessedAt: Date | null, assessmentCadenceDays: number): boolean {
   const days = daysSince(lastAssessedAt);
-  return days === null || days > ASSESSMENT_INTERVAL_DAYS;
+  return days === null || days > assessmentCadenceDays;
 }
 
 export type VendorListFilters = {
@@ -43,7 +41,7 @@ export async function listVendors(
 ) {
   const where = listWhere(ctx, filters);
 
-  const [vendors, total] = await Promise.all([
+  const [vendors, total, settings] = await Promise.all([
     prisma.vendor.findMany({
       where,
       orderBy: { [filters.sort ?? "name"]: filters.order ?? "asc" },
@@ -56,6 +54,7 @@ export async function listVendors(
       },
     }),
     prisma.vendor.count({ where }),
+    getOrgSettings(ctx.organizationId),
   ]);
 
   return {
@@ -70,7 +69,7 @@ export async function listVendors(
         lastAssessedAt: v.lastAssessedAt,
         archivedAt: v.archivedAt,
         daysSinceAssessment: daysSince(v.lastAssessedAt),
-        assessmentOverdue: assessmentOverdue(v.lastAssessedAt),
+        assessmentOverdue: assessmentOverdue(v.lastAssessedAt, settings.assessmentCadenceDays),
         baaCompliant: v.baaStatus === "SIGNED",
         assetCount: v.assetAccess.length,
         assets: v.assetAccess.map((a) => a.asset.name),
@@ -104,6 +103,7 @@ export async function getVendorById(ctx: TenantContext, id: number) {
   if (!v) throw new NotFoundError(`Vendor ${id} not found`);
 
   const risk = v.risks[0];
+  const settings = await getOrgSettings(ctx.organizationId);
 
   return {
     id: v.id,
@@ -112,7 +112,7 @@ export async function getVendorById(ctx: TenantContext, id: number) {
     phiVolume: v.phiVolume,
     lastAssessedAt: v.lastAssessedAt,
     daysSinceAssessment: daysSince(v.lastAssessedAt),
-    assessmentOverdue: assessmentOverdue(v.lastAssessedAt),
+    assessmentOverdue: assessmentOverdue(v.lastAssessedAt, settings.assessmentCadenceDays),
     baaCompliant: v.baaStatus === "SIGNED",
     createdAt: v.createdAt,
     updatedAt: v.updatedAt,

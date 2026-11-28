@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 /**
  * Integration tests hit real Express routes against a real Postgres, so they
@@ -26,7 +26,16 @@ Object.assign(process.env, TEST_ENV);
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "tests/**/*.test.ts", "scripts/**/*.test.ts"],
+    // demo-reset.test.ts needs a database whose name contains "demo" (it
+    // exercises the audit trigger's DELETE exception and reset-demo.ts's own
+    // "demo" guard) — see vitest.demo-reset.config.ts, run separately by
+    // `npm test` so the two never share one DATABASE_URL.
+    exclude: [
+      ...configDefaults.exclude,
+      "tests/integration/demo-reset.test.ts",
+      "tests/integration/meridian-seed.test.ts",
+    ],
     globalSetup: ["tests/setup/globalSetup.ts"],
     // Integration tests share one database; parallel files would race on the
     // same rows, so run them one file at a time.
@@ -36,5 +45,30 @@ export default defineConfig({
     // failed a hook that was merely slow, not broken.
     hookTimeout: 30_000,
     env: TEST_ENV,
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html"],
+      include: ["src/**/*.ts"],
+      exclude: ["src/**/*.test.ts", "src/generated/**"],
+      thresholds: {
+        // Overall floor — locks in where the suite already stands rather
+        // than being aspirational; a real drop below this is a real
+        // regression, not noise.
+        lines: 85,
+        statements: 85,
+        // The risk-scoring engine is the one place a silent regression
+        // changes a customer-facing number.
+        "src/services/riskScoring.ts": { statements: 100, branches: 100 },
+        "src/services/riskFactors.ts": { statements: 100, branches: 100 },
+        // Services as a group, not file-by-file — a handful of files
+        // (controlService.ts, memberService.ts, identityService.ts,
+        // dataFlowService.ts) sit in the 65-80% range individually; see
+        // VERIFICATION.md for the specific gaps. Glob thresholds in vitest's
+        // v8 provider are evaluated as an aggregate across every matched
+        // file, which is what lets this assert the group floor without
+        // failing on those lower individual files.
+        "src/services/**/*.ts": { lines: 90 },
+      },
+    },
   },
 });

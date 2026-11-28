@@ -1,0 +1,40 @@
+# Demo stack override. Run alongside the base compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm migrate
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml run --rm seed-demo
+#
+# Differs from docker-compose.yml only in: a database name that contains
+# "demo" (required by prisma/reset-demo.ts's safety guard), NODE_ENV=demo
+# instead of "production" (so seed-demo.ts / reset-demo.ts don't refuse to
+# run), and a one-shot seed-demo service.
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-medguard_demo}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-drishti} -d ${POSTGRES_DB:-medguard_demo}"]
+
+  api:
+    environment:
+      NODE_ENV: demo
+      DATABASE_URL: postgresql://${POSTGRES_USER:-drishti}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-medguard_demo}?schema=public
+      DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:?set DEMO_USER_PASSWORD in .env}
+
+  migrate:
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-drishti}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-medguard_demo}?schema=public
+
+  seed-demo:
+    build:
+      context: .
+      target: build
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: demo
+      DATABASE_URL: postgresql://${POSTGRES_USER:-drishti}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-medguard_demo}?schema=public
+      DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:?set DEMO_USER_PASSWORD in .env}
+    command: ["npx", "tsx", "prisma/seed-demo.ts"]

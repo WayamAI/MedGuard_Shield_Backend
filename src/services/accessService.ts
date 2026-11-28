@@ -1,6 +1,7 @@
 import type { AccessLevel, Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { ConflictError, NotFoundError } from "../lib/errors.js";
+import { getOrgSettings } from "./orgSettingsService.js";
 import { scope, type TenantContext } from "../lib/tenant.js";
 
 /**
@@ -47,13 +48,13 @@ type FlagInput = {
   asset: { phiVolume: number };
 };
 
-export function flagsFor(grant: FlagInput): GrantFlag[] {
+export function flagsFor(grant: FlagInput, staleAfterDays: number = STALE_AFTER_DAYS): GrantFlag[] {
   const flags: GrantFlag[] = [];
   const now = new Date();
   const idle = grant.lastUsedAt ? daysBetween(grant.lastUsedAt, now) : null;
 
   if (grant.lastUsedAt === null) flags.push("NEVER_USED");
-  else if (idle !== null && idle > STALE_AFTER_DAYS) flags.push("STALE");
+  else if (idle !== null && idle > staleAfterDays) flags.push("STALE");
 
   if (!grant.identity.active) flags.push("INACTIVE_IDENTITY");
 
@@ -118,15 +119,18 @@ export async function listAccessGrants(
     asset: { select: { id: true, name: true, type: true, phiVolume: true } },
   } as const;
 
-  const rows = await prisma.accessGrant.findMany({
-    where,
-    include,
-    ...(filters.flaggedOnly ? {} : { skip: page.skip, take: page.take }),
-    orderBy: { grantedAt: "desc" },
-  });
+  const [rows, settings] = await Promise.all([
+    prisma.accessGrant.findMany({
+      where,
+      include,
+      ...(filters.flaggedOnly ? {} : { skip: page.skip, take: page.take }),
+      orderBy: { grantedAt: "desc" },
+    }),
+    getOrgSettings(ctx.organizationId),
+  ]);
 
   const shaped = rows.map((g) => {
-    const flags = flagsFor(g);
+    const flags = flagsFor(g, settings.accessStaleAfterDays);
     const now = new Date();
     return {
       id: g.id,
@@ -191,15 +195,20 @@ function summarise(rows: Shaped[]) {
 
 /** Estate-wide counts, computed over every live grant rather than one page. */
 export async function accessSummary(ctx: TenantContext) {
-  const rows = await prisma.accessGrant.findMany({
-    where: { ...scope(ctx), revokedAt: null },
-    include: {
-      identity: { select: { active: true, kind: true, mfaEnabled: true } },
-      asset: { select: { phiVolume: true } },
-    },
-  });
+  const [rows, settings] = await Promise.all([
+    prisma.accessGrant.findMany({
+      where: { ...scope(ctx), revokedAt: null },
+      include: {
+        identity: { select: { active: true, kind: true, mfaEnabled: true } },
+        asset: { select: { phiVolume: true } },
+      },
+    }),
+    getOrgSettings(ctx.organizationId),
+  ]);
 
-  return summarise(rows.map((g) => ({ flags: flagsFor(g), lastReviewedAt: g.lastReviewedAt })));
+  return summarise(
+    rows.map((g) => ({ flags: flagsFor(g, settings.accessStaleAfterDays), lastReviewedAt: g.lastReviewedAt })),
+  );
 }
 
 export async function getAccessGrantById(ctx: TenantContext, id: number) {
@@ -212,7 +221,8 @@ export async function getAccessGrantById(ctx: TenantContext, id: number) {
   });
   if (!grant) throw new NotFoundError(`Access grant ${id} not found`);
 
-  const flags = flagsFor(grant);
+  const settings = await getOrgSettings(ctx.organizationId);
+  const flags = flagsFor(grant, settings.accessStaleAfterDays);
   return {
     id: grant.id,
     identityId: grant.identityId,

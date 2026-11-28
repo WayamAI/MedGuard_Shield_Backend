@@ -10,7 +10,12 @@ import { controlsRouter } from "./routes/controls.js";
 import { dataFlowsRouter } from "./routes/dataflows.js";
 import { identitiesRouter } from "./routes/identities.js";
 import { importRouter } from "./routes/import.js";
+import { ingestRouter } from "./routes/ingest.js";
+import { apiKeysRouter } from "./routes/apiKeys.js";
+import { membersRouter } from "./routes/members.js";
+import { notificationsRouter } from "./routes/notifications.js";
 import { organizationRouter } from "./routes/organization.js";
+import { phiInventoryRouter, phiTypesRouter } from "./routes/phiInventory.js";
 import { policiesRouter } from "./routes/policies.js";
 import { remediationsRouter } from "./routes/remediations.js";
 import { reportsRouter } from "./routes/reports.js";
@@ -19,6 +24,7 @@ import { searchRouter } from "./routes/search.js";
 import { threatsRouter } from "./routes/threats.js";
 import { vendorsRouter } from "./routes/vendors.js";
 import { prisma } from "./lib/prisma.js";
+import { env, isProduction } from "./config.js";
 
 /**
  * The version /health reports.
@@ -43,10 +49,15 @@ const VERSION = ((): string => {
   }
 })();
 import { requireAuth } from "./middleware/auth.js";
-import { createGlobalLimiter, createLoginLimiter } from "./middleware/security.js";
+import {
+  createAuthenticatedLimiter, createExportLimiter, createGlobalLimiter, createIngestLimiter,
+  createLoginLimiter,
+} from "./middleware/security.js";
+import { requireApiKey } from "./middleware/apiKeyAuth.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
+import { httpLogger } from "./middleware/logging.js";
 
-export function createApp() {
+export function createApp(options: { loginLimit?: number } = {}) {
   const app = express();
 
   // Security headers first, so they are present on every response including
@@ -55,11 +66,14 @@ export function createApp() {
   // risking confusion with the frontend's own policy.
   app.use(helmet({ contentSecurityPolicy: false }));
 
+  // Request-ID + structured logging, before anything that might error, so
+  // every response — including rate-limit rejections and auth failures —
+  // gets logged and carries the same id as its error envelope.
+  app.use(httpLogger);
+
   // Trust the first proxy hop so rate limiting keys on the real client IP
   // rather than a load balancer's, once this sits behind one.
   app.set("trust proxy", 1);
-
-  app.use(createGlobalLimiter());
 
   /**
    * CORS. A comma-separated FRONTEND_ORIGIN allows more than one origin, which
@@ -67,7 +81,7 @@ export function createApp() {
    * wildcard, because credentials:true is what lets the browser send the
    * session cookie and `*` is invalid with credentials in any case.
    */
-  const origins = (process.env.FRONTEND_ORIGIN ?? "http://localhost:8080")
+  const origins = env.FRONTEND_ORIGIN
     .split(",")
     .map((o) => o.trim())
     .filter(Boolean);
@@ -82,13 +96,16 @@ export function createApp() {
    * Public. Health stays outside /api precisely so the auth gate below never
    * applies to it — a probe that needs a token is not a liveness probe.
    */
-  app.get("/health", (_req, res) => {
+  const liveness = (_req: express.Request, res: express.Response) => {
     res.json({
       status: "ok",
       service: "drishti-api",
       version: VERSION,
     });
-  });
+  };
+  app.get("/health", liveness);
+  // Conventional alias for infra that expects /healthz specifically.
+  app.get("/healthz", liveness);
 
   /**
    * Readiness, as distinct from liveness. `/health` above answers "is this
@@ -103,7 +120,7 @@ export function createApp() {
    * warm while the database went to sleep underneath it. The round trip here
    * is what keeps both ends awake.
    */
-  app.get("/health/ready", async (_req, res) => {
+  const readiness = async (_req: express.Request, res: express.Response) => {
     try {
       await prisma.$queryRaw`SELECT 1`;
       res.json({ status: "ready", service: "drishti-api" });
@@ -114,19 +131,67 @@ export function createApp() {
       console.error("[drishti] readiness probe failed: database unreachable");
       res.status(503).json({ status: "degraded", service: "drishti-api" });
     }
-  });
+  };
+  app.get("/health/ready", readiness);
+  // Conventional alias for infra that expects /readyz specifically.
+  app.get("/readyz", readiness);
 
-  // Public: you cannot present a token before you have one. Login carries its
-  // own much tighter limit on top of the global one.
-  app.use("/api/auth/login", createLoginLimiter());
+  /**
+   * The generated OpenAPI spec (npm run openapi:generate), served raw rather
+   * than through a UI dependency — never in production, since it both
+   * describes attack surface and is only useful to people building against
+   * a non-production environment anyway.
+   */
+  if (!isProduction) {
+    app.get("/api/docs", (_req, res) => {
+      try {
+        const require = createRequire(import.meta.url);
+        const spec = require("../openapi.json");
+        res.json(spec);
+      } catch {
+        res.status(404).json({
+          error: { code: "SPEC_NOT_FOUND", message: "Run `npm run openapi:generate` first." },
+        });
+      }
+    });
+  }
+
+  // /api/auth is the one router with a genuinely mixed public/protected
+  // route list (login/forgot-password/reset-password/accept-invite are
+  // public; /me, /mfa/*, /sessions, /change-password, /logout-all require
+  // requireAuth internally, per-route). IP-keyed: see createGlobalLimiter's
+  // comment for why that's the right call here and nowhere else past this
+  // point. Login carries its own much tighter limit on top of this one.
+  app.use("/api/auth", createGlobalLimiter());
+  app.use("/api/auth/login", createLoginLimiter({ limit: options.loginLimit }));
   app.use("/api/auth", authRouter);
+
+  // Ingestion is authenticated by its own API key, not a session, so it is
+  // mounted here too — before the session gate below would otherwise
+  // reject it for having no cookie or bearer token. requireApiKey runs
+  // before the limiter (not after, as a naive copy of the pattern above
+  // would do) so createIngestLimiter can key on req.ctx.connectorId.
+  app.use("/api/ingest", requireApiKey, createIngestLimiter(), ingestRouter);
 
   // Everything past this line requires a valid session. requireAuth is also
   // where req.ctx.organizationId originates — every scoped query downstream
   // filters on it, and nothing reads a tenant id from request input.
+  //
+  // createAuthenticatedLimiter and createExportLimiter are both keyed on
+  // req.ctx.userId, so they must be mounted after requireAuth populates it —
+  // mounting them at the top of the file (as a naive "global limiter" read)
+  // would silently fall back to IP-keying and reintroduce the exact
+  // shared-NAT problem they exist to fix.
   app.use("/api", requireAuth);
+  app.use("/api", createAuthenticatedLimiter());
+  // Self-skipping for every request that isn't a `?format=csv` export, so
+  // this one mount covers every export endpoint without touching each
+  // route file individually.
+  app.use("/api", createExportLimiter());
 
   app.use("/api/organization", organizationRouter);
+  app.use("/api/members", membersRouter);
+  app.use("/api/notifications", notificationsRouter);
   app.use("/api/assets", assetsRouter);
   app.use("/api/dataflows", dataFlowsRouter);
   app.use("/api/risks", risksRouter);
@@ -141,6 +206,9 @@ export function createApp() {
   app.use("/api/search", searchRouter);
   app.use("/api/reports", reportsRouter);
   app.use("/api/import", importRouter);
+  app.use("/api/api-keys", apiKeysRouter);
+  app.use("/api/phi-inventory", phiInventoryRouter);
+  app.use("/api/phi-types", phiTypesRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

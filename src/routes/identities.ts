@@ -15,16 +15,16 @@ export const identitiesRouter = Router();
 
 const KINDS = ["USER", "SERVICE_ACCOUNT"] as const;
 const ROLES = ["ADMIN", "ANALYST", "VIEWER"] as const;
-const idParam = z.object({ id: z.coerce.number().int().positive() });
+export const idParam = z.object({ id: z.coerce.number().int().positive() });
 
-const listQuery = paginationQuery.extend({
+export const listQuery = paginationQuery.extend({
   search: z.string().trim().min(1).max(120).optional(),
   kind: z.enum(KINDS).optional(),
   active: z.coerce.boolean().optional(),
   includeArchived: z.coerce.boolean().optional(),
 });
 
-const createBody = z.object({
+export const createBody = z.object({
   displayName: z.string().trim().min(1).max(120),
   email: z.string().email().nullable().optional(),
   kind: z.enum(KINDS).optional(),
@@ -34,7 +34,7 @@ const createBody = z.object({
   mfaEnabled: z.boolean().optional(),
 });
 
-const patchBody = createBody.partial().refine(
+export const patchBody = createBody.partial().refine(
   (v) => Object.keys(v).length > 0,
   { message: "Provide at least one field to update" },
 );

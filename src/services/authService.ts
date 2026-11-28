@@ -3,8 +3,17 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import type { Role } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
+import { env, isProduction, isTest } from "../config.js";
 import { HttpError } from "../lib/errors.js";
 import type { TenantContext } from "../lib/tenant.js";
+import { requiresMfa, verifyMfaChallenge } from "./mfaService.js";
+
+/** Thrown by `login` when the account has MFA enabled and no code (or a bad one) was given. */
+export class MfaRequiredError extends HttpError {
+  constructor(message = "MFA verification code required") {
+    super(401, message, "MFA_REQUIRED");
+  }
+}
 
 /**
  * Local email + password auth, issuing a short-lived access JWT alongside a
@@ -53,17 +62,33 @@ export { UnauthorizedError, ForbiddenError };
  * silently defaults is a signing key an attacker already knows.
  */
 function signingSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret.length < 16) {
-    throw new Error(
-      "JWT_SECRET is missing or too short (need 16+ chars) — see .env.example",
-    );
-  }
-  return secret;
+  return env.JWT_SECRET;
 }
 
+/**
+ * OWASP Password Storage Cheat Sheet: bcrypt work factor >= 10, 12 as a safer
+ * modern baseline. Lowered under NODE_ENV=test only — the integration suite
+ * hashes and compares real passwords hundreds of times, and cost-12 bcrypt
+ * is deliberately slow, which is exactly what makes it the wrong thing to
+ * pay for repeatedly in a test run. `assertProductionBcryptCost` below is
+ * the regression test for this line in the only direction that matters:
+ * production never silently inherits the fast path.
+ */
+const BCRYPT_COST = isTest ? 4 : 12;
+
+/** Defense in depth for the line above: fails loudly rather than booting with a weakened cost factor in production. */
+export function assertProductionBcryptCost(): void {
+  if (isProduction && BCRYPT_COST < 12) {
+    throw new Error(`BCRYPT_COST is ${BCRYPT_COST} in production; must be >= 12`);
+  }
+}
+// Runs at import time in every environment, not just when something
+// remembers to call it from server startup — a no-op everywhere but
+// production, where it refuses to let the module load with a weakened cost.
+assertProductionBcryptCost();
+
 export async function hashPassword(plaintext: string): Promise<string> {
-  return bcrypt.hash(plaintext, 10);
+  return bcrypt.hash(plaintext, BCRYPT_COST);
 }
 
 /**
@@ -74,7 +99,7 @@ export async function hashPassword(plaintext: string): Promise<string> {
  * human secret — there is nothing for a slow hash to defend against, and the
  * refresh path would pay bcrypt's cost on every call.
  */
-function hashRefreshToken(token: string): string {
+export function hashRefreshToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -95,8 +120,18 @@ export type SessionResult = {
   memberships: SessionMembership[];
 };
 
+/** Pinned explicitly on both sign and verify, so neither "none" nor an attacker-chosen asymmetric algorithm is ever accepted. */
+const JWT_ALGORITHM = "HS256";
+const JWT_ISSUER = "drishti-api";
+const JWT_AUDIENCE = "drishti-client";
+
 function signAccessToken(user: AuthUser): string {
-  return jwt.sign(user, signingSecret(), { expiresIn: ACCESS_TOKEN_TTL_SECONDS });
+  return jwt.sign(user, signingSecret(), {
+    algorithm: JWT_ALGORITHM,
+    expiresIn: ACCESS_TOKEN_TTL_SECONDS,
+    issuer: JWT_ISSUER,
+    audience: JWT_AUDIENCE,
+  });
 }
 
 /** Issues and persists a refresh token for one user/organisation pair. */
@@ -123,7 +158,7 @@ async function issueRefreshToken(
 
 async function membershipsFor(userId: number): Promise<SessionMembership[]> {
   const rows = await prisma.organizationMember.findMany({
-    where: { userId },
+    where: { userId, active: true },
     include: { organization: { select: { name: true, slug: true } } },
     orderBy: { organizationId: "asc" },
   });
@@ -147,7 +182,7 @@ async function membershipsFor(userId: number): Promise<SessionMembership[]> {
 export async function login(
   email: string,
   password: string,
-  options: { organizationId?: number; userAgent?: string | null; ip?: string | null } = {},
+  options: { organizationId?: number; userAgent?: string | null; ip?: string | null; mfaCode?: string } = {},
 ): Promise<SessionResult> {
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
@@ -158,6 +193,13 @@ export async function login(
 
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) throw invalid;
+
+  if (await requiresMfa(user.id)) {
+    if (!options.mfaCode) throw new MfaRequiredError();
+    if (!(await verifyMfaChallenge(user.id, options.mfaCode))) {
+      throw new MfaRequiredError("Invalid MFA verification code");
+    }
+  }
 
   const memberships = await membershipsFor(user.id);
   if (memberships.length === 0) {
@@ -285,10 +327,46 @@ export async function revokeAllRefreshTokens(userId: number): Promise<number> {
   return result.count;
 }
 
+/**
+ * Active sessions, one row per live (unexpired, unrevoked) refresh token.
+ * Each rotation on `/auth/refresh` creates a new row and revokes the one it
+ * replaced, so this is naturally "one row per device/browser still signed
+ * in" without a separate session table.
+ */
+export async function listSessions(userId: number) {
+  return prisma.refreshToken.findMany({
+    where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+    select: { id: true, createdAt: true, expiresAt: true, userAgent: true, ip: true },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+/** Revokes one session by its row id, scoped to the caller so a user can't revoke someone else's. */
+export async function revokeSessionById(userId: number, sessionId: number): Promise<boolean> {
+  const result = await prisma.refreshToken.updateMany({
+    where: { id: sessionId, userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  return result.count > 0;
+}
+
+/** Revokes every session except the one presenting `keepTokenHash`. */
+export async function revokeOtherSessions(userId: number, keepTokenHash: string): Promise<number> {
+  const result = await prisma.refreshToken.updateMany({
+    where: { userId, revokedAt: null, tokenHash: { not: keepTokenHash } },
+    data: { revokedAt: new Date() },
+  });
+  return result.count;
+}
+
 /** Decodes and validates an access token. Throws 401 on anything suspect. */
 export function verifyToken(token: string): AuthUser {
   try {
-    const payload = jwt.verify(token, signingSecret());
+    const payload = jwt.verify(token, signingSecret(), {
+      algorithms: [JWT_ALGORITHM],
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+    });
     if (typeof payload === "string") throw new Error("unexpected string payload");
 
     const { id, email, role, organizationId } = payload as Partial<AuthUser>;

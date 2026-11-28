@@ -1,4 +1,5 @@
 import { parse } from "csv-parse/sync";
+import ExcelJS from "exceljs";
 import type { ColumnSpec, EntitySpec } from "./importSpec.js";
 
 /**
@@ -52,6 +53,29 @@ function looksLikeFormula(value: string): boolean {
 }
 
 /**
+ * Patterns shaped like a real patient identifier -- not a PHI *category*
+ * (which this product only ever imports metadata about), but something
+ * that looks like it names an actual person's record. Checked on every
+ * free-text column, since nothing in the entity specs has a legitimate
+ * reason to contain one: a Social Security number, a labelled medical
+ * record number, or a labelled date of birth. Matches invariant #2 (never
+ * stores patient records) at the one layer closest to the attacker's
+ * actual input.
+ */
+const PATIENT_IDENTIFIER_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /\b\d{3}-\d{2}-\d{4}\b/, label: "a Social Security number" },
+  { pattern: /\bMRN[:\s#-]*\d{4,}\b/i, label: "a medical record number" },
+  { pattern: /\bDOB[:\s-]*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/i, label: "a date of birth" },
+];
+
+function looksLikePatientIdentifier(value: string): string | null {
+  for (const { pattern, label } of PATIENT_IDENTIFIER_PATTERNS) {
+    if (pattern.test(value)) return label;
+  }
+  return null;
+}
+
+/**
  * Escapes a value on the way *out* into a CSV we generate. Prefixing with a
  * single quote is what makes Excel treat the cell as text. Used by the
  * template endpoint so our own sample files cannot be the attack either.
@@ -71,6 +95,17 @@ export function templateCsv(spec: EntitySpec): string {
     spec.columns.map((c) => c.column),
     [spec.columns.map((c) => c.example)],
   );
+}
+
+/** The xlsx twin of templateCsv: header row plus one example row, first sheet. */
+export async function templateXlsx(spec: EntitySpec): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet(spec.slug);
+  sheet.addRow(spec.columns.map((c) => c.column));
+  sheet.addRow(spec.columns.map((c) => c.example));
+  // exceljs ships its own (older) @types/node, so its Buffer type and ours
+  // are structurally different; both describe the same runtime Node Buffer.
+  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 }
 
 class CsvFormatError extends Error {}
@@ -146,6 +181,16 @@ function coerce(
         `${col.column} starts with "${value[0]}", which spreadsheets treat as a formula. ` +
         "Remove the leading character.",
     };
+  }
+
+  if (col.type === "string") {
+    const identifierLabel = looksLikePatientIdentifier(value);
+    if (identifierLabel) {
+      return {
+        ok: false,
+        message: `${col.column} looks like it contains ${identifierLabel}. Drishti stores PHI metadata only, never patient records.`,
+      };
+    }
   }
 
   switch (col.type) {
@@ -224,7 +269,62 @@ export function parseCsv(spec: EntitySpec, text: string): ParseOutcome {
     const message = err instanceof CsvFormatError ? err.message : "Unreadable CSV";
     return { errors: [{ row: 1, field: "file", message: `CSV could not be parsed: ${message}` }], rows: [], rowNumbers: [], totalRows: 0 };
   }
+  return validateRecords(spec, records);
+}
 
+/**
+ * The xlsx twin of parseCsv: same validation, different source. Reads only the
+ * first worksheet. A formula cell is read as its cached `result` — the value
+ * Excel itself last computed — never evaluated here, so a formula cannot run
+ * through the import path any more than through the CSV one.
+ */
+export async function parseXlsx(spec: EntitySpec, buffer: Buffer): Promise<ParseOutcome> {
+  const workbook = new ExcelJS.Workbook();
+  try {
+    await workbook.xlsx.load(buffer as unknown as never);
+  } catch {
+    return { errors: [{ row: 1, field: "file", message: "XLSX could not be parsed: unreadable workbook" }], rows: [], rowNumbers: [], totalRows: 0 };
+  }
+
+  const sheet = workbook.worksheets[0];
+  if (!sheet || sheet.rowCount === 0) {
+    return { errors: [{ row: 1, field: "file", message: "File contains no data rows" }], rows: [], rowNumbers: [], totalRows: 0 };
+  }
+
+  const header: string[] = [];
+  sheet.getRow(1).eachCell({ includeEmpty: false }, (cell) => {
+    header.push(cellToString(cell.value));
+  });
+
+  const records: Record<string, string>[] = [];
+  for (let r = 2; r <= sheet.rowCount; r++) {
+    const row = sheet.getRow(r);
+    if (row.cellCount === 0) continue;
+    const record: Record<string, string> = {};
+    header.forEach((col, i) => {
+      record[col] = cellToString(row.getCell(i + 1).value);
+    });
+    records.push(record);
+  }
+
+  return validateRecords(spec, records);
+}
+
+/** Converts one ExcelJS cell value to the plain string the CSV path would see. */
+function cellToString(value: ExcelJS.CellValue): string {
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === "object") {
+    if ("richText" in value) return value.richText.map((r) => r.text).join("");
+    if ("result" in value) return cellToString(value.result ?? "");
+    if ("text" in value) return String(value.text);
+    if ("error" in value) return "";
+    return "";
+  }
+  return String(value);
+}
+
+function validateRecords(spec: EntitySpec, records: Record<string, string>[]): ParseOutcome {
   if (records.length === 0) {
     return { errors: [{ row: 1, field: "file", message: "File contains no data rows" }], rows: [], rowNumbers: [], totalRows: 0 };
   }

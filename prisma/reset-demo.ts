@@ -1,4 +1,7 @@
 import "dotenv/config";
+import { execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { prisma } from "../src/lib/prisma.js";
 import { DEMO_ORG_SLUG, seedDemo, type SeedSummary } from "./seed-demo.js";
 import type { Prisma } from "../src/generated/prisma/client.js";
@@ -65,6 +68,12 @@ type Step = { table: string; run: (tx: Prisma.TransactionClient, organizationId:
  * `onDelete: Restrict`, so flows must go before PHI types.
  */
 const STEPS: Step[] = [
+  // AuditEvent is append-only everywhere else (a DB trigger enforces it — see
+  // the add_audit_immutability and allow_demo_audit_delete migrations), but
+  // this one ordinary deleteMany still succeeds: the trigger function itself
+  // carries the one exception, permitting DELETE only when the row's own
+  // organization has a "demo" slug. Nothing in this file disables a trigger
+  // or touches SQL directly, which is itself a tested invariant below.
   { table: "auditEvent", run: (tx, o) => tx.auditEvent.deleteMany({ where: { organizationId: o } }) },
   { table: "riskHistory", run: (tx, o) => tx.riskHistory.deleteMany({ where: { organizationId: o } }) },
   { table: "remediation", run: (tx, o) => tx.remediation.deleteMany({ where: { organizationId: o } }) },
@@ -101,34 +110,39 @@ export async function censusOutside(
   const not = { not: organizationId };
   // Sequential, not Promise.all: these run on the single connection held by
   // the interactive transaction, and node-postgres does not support
-  // concurrent queries on one client.
-  const counts: number[] = [];
-  for (const query of [
-    tx.organization.count({ where: { id: not } }),
-    tx.user.count(),
-    tx.organizationMember.count({ where: { organizationId: not } }),
-    tx.refreshToken.count({ where: { organizationId: not } }),
-    tx.asset.count({ where: { organizationId: not } }),
-    tx.pHIType.count({ where: { organizationId: not } }),
-    tx.assetPHI.count({ where: { asset: { organizationId: not } } }),
-    tx.dataFlow.count({ where: { organizationId: not } }),
-    tx.risk.count({ where: { organizationId: not } }),
-    tx.riskHistory.count({ where: { organizationId: not } }),
-    tx.vendor.count({ where: { organizationId: not } }),
-    tx.vendorRisk.count({ where: { organizationId: not } }),
-    tx.vendorAssetAccess.count({ where: { vendor: { organizationId: not } } }),
-    tx.identity.count({ where: { organizationId: not } }),
-    tx.accessGrant.count({ where: { organizationId: not } }),
-    tx.threat.count({ where: { organizationId: not } }),
-    tx.control.count({ where: { organizationId: not } }),
-    tx.assetControl.count({ where: { asset: { organizationId: not } } }),
-    tx.policy.count({ where: { organizationId: not } }),
-    tx.policyControl.count({ where: { policy: { organizationId: not } } }),
-    tx.remediation.count({ where: { organizationId: not } }),
+  // concurrent queries on one client. Each entry is a thunk, not a fired
+  // query -- an array of already-called `tx.x.count()` promises would start
+  // every query immediately on construction, before the loop below ever
+  // gets to `await` the first one, which is exactly the bug this comment
+  // used to describe without actually avoiding.
+  const queries: Array<() => Promise<number>> = [
+    () => tx.organization.count({ where: { id: not } }),
+    () => tx.user.count(),
+    () => tx.organizationMember.count({ where: { organizationId: not } }),
+    () => tx.refreshToken.count({ where: { organizationId: not } }),
+    () => tx.asset.count({ where: { organizationId: not } }),
+    () => tx.pHIType.count({ where: { organizationId: not } }),
+    () => tx.assetPHI.count({ where: { asset: { organizationId: not } } }),
+    () => tx.dataFlow.count({ where: { organizationId: not } }),
+    () => tx.risk.count({ where: { organizationId: not } }),
+    () => tx.riskHistory.count({ where: { organizationId: not } }),
+    () => tx.vendor.count({ where: { organizationId: not } }),
+    () => tx.vendorRisk.count({ where: { organizationId: not } }),
+    () => tx.vendorAssetAccess.count({ where: { vendor: { organizationId: not } } }),
+    () => tx.identity.count({ where: { organizationId: not } }),
+    () => tx.accessGrant.count({ where: { organizationId: not } }),
+    () => tx.threat.count({ where: { organizationId: not } }),
+    () => tx.control.count({ where: { organizationId: not } }),
+    () => tx.assetControl.count({ where: { asset: { organizationId: not } } }),
+    () => tx.policy.count({ where: { organizationId: not } }),
+    () => tx.policyControl.count({ where: { policy: { organizationId: not } } }),
+    () => tx.remediation.count({ where: { organizationId: not } }),
     // Includes the tenant-less rows (failed logins), which must also survive.
-    tx.auditEvent.count({ where: { OR: [{ organizationId: not }, { organizationId: null }] } }),
-  ]) {
-    counts.push(await query);
+    () => tx.auditEvent.count({ where: { OR: [{ organizationId: not }, { organizationId: null }] } }),
+  ];
+  const counts: number[] = [];
+  for (const query of queries) {
+    counts.push(await query());
   }
 
   const labels = [
@@ -160,6 +174,37 @@ export async function resetDemo(options: { quiet?: boolean } = {}): Promise<Rese
       "Refusing to reset a demo organisation with NODE_ENV=production. " +
       "Set DEMO_RESET_ALLOW_PRODUCTION=yes if that is genuinely what you want.",
     );
+  }
+
+  // Refuse to run against a database whose name does not look like a demo
+  // database, so a misconfigured DATABASE_URL (e.g. pointed at dev/prod) can't
+  // delete real rows. Override with DEMO_RESET_ALLOW_ANY_DB=yes for a
+  // genuinely different naming scheme.
+  const dbUrl = process.env.DATABASE_URL ?? "";
+  const dbName = dbUrl.split("/").pop()?.split("?")[0] ?? "";
+  if (!dbName.toLowerCase().includes("demo") && process.env.DEMO_RESET_ALLOW_ANY_DB !== "yes") {
+    throw new Error(
+      `Refusing to reset: database "${dbName}" does not look like a demo database ` +
+      '(its name does not contain "demo"). Set DEMO_RESET_ALLOW_ANY_DB=yes to override.',
+    );
+  }
+
+  // Non-negotiable: back up before any destructive statement runs, so a
+  // scoping bug or a bad DATABASE_URL never loses data unrecoverably.
+  if (process.env.DEMO_RESET_SKIP_BACKUP !== "yes") {
+    const backupDir = join(process.cwd(), "prisma", "backups");
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- backupDir is built entirely from process.cwd() and fixed strings above, never from request/user input.
+    mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = join(backupDir, `pre-reset_${dbName}_${stamp}.sql`);
+    log(`[demo-reset] backing up "${dbName}" to ${backupPath} before any deletion...`);
+    // pg_dump's connection URI only understands standard libpq parameters --
+    // Prisma's "?schema=" suffix on DATABASE_URL isn't one of them and makes
+    // pg_dump reject the whole URL. Not needed here anyway: pg_dump dumps
+    // every schema in the target database by default.
+    const pgDumpUrl = dbUrl.split("?")[0] ?? dbUrl;
+    execFileSync("pg_dump", [pgDumpUrl, "-f", backupPath], { stdio: "inherit" });
+    log(`[demo-reset] backup complete: ${backupPath}`);
   }
 
   const org = await prisma.organization.findUnique({ where: { slug: DEMO_ORG_SLUG } });

@@ -8,12 +8,13 @@ import { listRisks, riskDistribution } from "../services/riskService.js";
 import { listRiskHistory, recomputeAssetRisk } from "../services/riskEngine.js";
 import { requirePermission } from "../middleware/auth.js";
 import { recordAudit } from "../services/auditService.js";
+import { maybeSendCsv } from "../lib/csv.js";
 
 export const risksRouter = Router();
 
 const BANDS = ["LOW", "MODERATE", "HIGH", "CRITICAL", "EXTREME"] as const;
 
-const listQuery = paginationQuery.extend({
+export const listQuery = paginationQuery.extend({
   band: z.enum(BANDS).optional(),
   assetId: z.coerce.number().int().positive().optional(),
 });
@@ -27,9 +28,26 @@ const listQuery = paginationQuery.extend({
  */
 risksRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
+    const ctx = ctxOf(req);
     const q = listQuery.parse(req.query);
+    if (req.query.format === "csv") {
+      const { items } = await listRisks(ctx, q, {});
+      await recordAudit(ctx, { action: "DATA_EXPORTED", entityType: "Risk", metadata: { count: items.length }, req });
+      maybeSendCsv(req, res, "risks.csv", items, [
+        { header: "Asset", value: (r) => r.assetName },
+        { header: "Type", value: (r) => r.assetType },
+        { header: "Likelihood", value: (r) => r.likelihood },
+        { header: "Impact", value: (r) => r.impact },
+        { header: "Exposure", value: (r) => r.exposure },
+        { header: "Control Gap", value: (r) => r.controlGap },
+        { header: "Score", value: (r) => r.score },
+        { header: "Band", value: (r) => r.band },
+        { header: "Computed At", value: (r) => r.computedAt?.toISOString?.() ?? "" },
+      ]);
+      return;
+    }
     const page = pageParams(q);
-    const { items, total } = await listRisks(ctxOf(req), q, page);
+    const { items, total } = await listRisks(ctx, q, page);
     paged(res, items, pageMeta(page, total));
   } catch (err) {
     next(err);
@@ -44,7 +62,7 @@ risksRouter.get("/distribution", async (req, res, next) => {
   }
 });
 
-const historyQuery = paginationQuery.extend({
+export const historyQuery = paginationQuery.extend({
   /** Narrow to asset or vendor movement. Omitted, both are returned. */
   subjectType: z.enum(["ASSET", "VENDOR"]).optional(),
   assetId: z.coerce.number().int().positive().optional(),
@@ -75,7 +93,7 @@ risksRouter.get("/history", validate({ query: historyQuery }), async (req, res, 
  * the frontend calls it. Kept working rather than broken, and documented as
  * deprecated in FRONTEND_API_CONTRACT.md so there is a date on which it can go.
  */
-const assetIdParam = z.object({ assetId: z.coerce.number().int().positive() });
+export const assetIdParam = z.object({ assetId: z.coerce.number().int().positive() });
 
 risksRouter.post(
   "/:assetId/recompute",

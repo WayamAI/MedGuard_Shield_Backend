@@ -1,4 +1,5 @@
 import type { Request } from "express";
+import { createHash } from "node:crypto";
 import type { AuditAction, AuditResult } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import type { TenantContext } from "../lib/tenant.js";
@@ -21,9 +22,18 @@ import type { TenantContext } from "../lib/tenant.js";
  */
 
 /** Minimal shape both `prisma` and a `$transaction` client satisfy. */
-type AuditDb = { auditEvent: { create: (args: { data: AuditRow }) => Promise<unknown> } };
+type AuditDb = {
+  auditEvent: {
+    create: (args: { data: AuditRow & { createdAt: Date; prevHash: string; hash: string } }) => Promise<unknown>;
+    findFirst: (args: {
+      where: { organizationId: number | null };
+      orderBy: { id: "desc" };
+      select: { hash: true };
+    }) => Promise<{ hash: string | null } | null>;
+  };
+};
 
-type AuditRow = {
+export type AuditRow = {
   organizationId: number | null;
   actorUserId: number | null;
   actorEmail: string | null;
@@ -93,6 +103,15 @@ export type AuditInput = {
   metadata?: unknown;
   /** Request, purely for IP and user agent. Never read for auth. */
   req?: Request;
+  /**
+   * Overrides the row's timestamp at insert time — the only way to backdate
+   * one now that the table is enforced append-only (see the
+   * `add_audit_immutability` migration): there is no longer a second UPDATE
+   * step to do it after the fact. Used by `prisma/seed-demo.ts` to make a
+   * freshly-seeded trail read as history rather than a burst of activity at
+   * seed time; no application code should otherwise need this.
+   */
+  createdAt?: Date;
 };
 
 /** Truncated because a hostile client controls it and the column is unbounded. */
@@ -111,25 +130,50 @@ function ipOf(req: Request | undefined): string | null {
  * Pass `db` as the surrounding `$transaction` client whenever one exists, so
  * the audit row cannot survive a rolled-back change or vice versa.
  */
+/**
+ * shortcut: a race is possible when two writes for the same org compute
+ * `prevHash` from the same snapshot concurrently — `verify` could then
+ * report a false break at that point even though nothing was tampered with.
+ * Upgrade to a per-org advisory lock around the read+insert if write volume
+ * ever makes that worth the latency; not worth it at this product's scale.
+ */
+/** Shared with `verifyAuditChain` in auditQueryService.ts, so both sides hash identically. */
+export function computeRowHash(prevHash: string, row: AuditRow, createdAt: Date): string {
+  const content = JSON.stringify({ ...row, createdAt: createdAt.toISOString() });
+  return createHash("sha256").update(prevHash + content).digest("hex");
+}
+
+async function nextHash(db: AuditDb, organizationId: number | null, row: AuditRow, createdAt: Date) {
+  const previous = await db.auditEvent.findFirst({
+    where: { organizationId },
+    orderBy: { id: "desc" },
+    select: { hash: true },
+  });
+  const prevHash = previous?.hash ?? "";
+  return { prevHash, hash: computeRowHash(prevHash, row, createdAt) };
+}
+
 export async function recordAudit(
   ctx: TenantContext,
   input: AuditInput,
   db: AuditDb = prisma,
 ): Promise<void> {
-  await db.auditEvent.create({
-    data: {
-      organizationId: ctx.organizationId,
-      actorUserId: ctx.userId,
-      actorEmail: ctx.email,
-      action: input.action,
-      entityType: input.entityType ?? null,
-      entityId: input.entityId ?? null,
-      result: input.result ?? "SUCCESS",
-      metadata: sanitiseMetadata(input.metadata),
-      ip: ipOf(input.req),
-      userAgent: userAgentOf(input.req),
-    },
-  });
+  const row: AuditRow = {
+    organizationId: ctx.organizationId,
+    actorUserId: ctx.userId,
+    actorEmail: ctx.email,
+    action: input.action,
+    entityType: input.entityType ?? null,
+    entityId: input.entityId ?? null,
+    result: input.result ?? "SUCCESS",
+    metadata: sanitiseMetadata(input.metadata),
+    ip: ipOf(input.req),
+    userAgent: userAgentOf(input.req),
+  };
+  const createdAt = input.createdAt ?? new Date();
+  const { prevHash, hash } = await nextHash(db, ctx.organizationId, row, createdAt);
+
+  await db.auditEvent.create({ data: { ...row, createdAt, prevHash, hash } });
 }
 
 /**
@@ -151,20 +195,23 @@ export async function recordAuthEvent(input: {
   metadata?: unknown;
   req?: Request;
 }): Promise<void> {
-  await prisma.auditEvent.create({
-    data: {
-      organizationId: input.organizationId ?? null,
-      actorUserId: input.actorUserId ?? null,
-      actorEmail: input.actorEmail,
-      action: input.action,
-      entityType: "User",
-      entityId: input.actorUserId ?? null,
-      result: input.result ?? "SUCCESS",
-      metadata: sanitiseMetadata(input.metadata),
-      ip: ipOf(input.req),
-      userAgent: userAgentOf(input.req),
-    },
-  });
+  const organizationId = input.organizationId ?? null;
+  const row: AuditRow = {
+    organizationId,
+    actorUserId: input.actorUserId ?? null,
+    actorEmail: input.actorEmail,
+    action: input.action,
+    entityType: "User",
+    entityId: input.actorUserId ?? null,
+    result: input.result ?? "SUCCESS",
+    metadata: sanitiseMetadata(input.metadata),
+    ip: ipOf(input.req),
+    userAgent: userAgentOf(input.req),
+  };
+  const createdAt = new Date();
+  const { prevHash, hash } = await nextHash(prisma, organizationId, row, createdAt);
+
+  await prisma.auditEvent.create({ data: { ...row, createdAt, prevHash, hash } });
 }
 
 /**

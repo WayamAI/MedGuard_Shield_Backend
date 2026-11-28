@@ -51,14 +51,16 @@ describe("POST /api/auth/login", () => {
     expect(res.body.data.user).toMatchObject({ email: "admin@test.local", role: "ADMIN" });
   });
 
-  it("sets an httpOnly session cookie alongside the token", async () => {
+  it("sets only the refresh token as an httpOnly cookie, never the access token", async () => {
     const res = await request(app)
       .post("/api/auth/login")
       .send({ email: "admin@test.local", password: TEST_PASSWORD });
 
-    const cookie = res.headers["set-cookie"]?.[0] ?? "";
-    expect(cookie).toContain("drishti_token=");
-    expect(cookie).toContain("HttpOnly");
+    const cookies = (res.headers["set-cookie"] ?? []) as unknown as string[];
+    const joined = cookies.join("; ");
+    expect(joined).toContain("drishti_refresh=");
+    expect(joined).not.toContain("drishti_token=");
+    expect(cookies.every((c) => c.includes("HttpOnly"))).toBe(true);
   });
 
   it("rejects a wrong password with 401", async () => {
@@ -79,7 +81,12 @@ describe("POST /api/auth/login", () => {
       .send({ email: "admin@test.local", password: "wrong" });
 
     expect(unknown.status).toBe(wrongPassword.status);
-    expect(unknown.body).toEqual(wrongPassword.body);
+    // requestId is unique per request by design (see middleware/logging.ts)
+    // and carries no information about which branch produced the error, so
+    // it's excluded from the enumeration-safety comparison.
+    const { requestId: _unknownId, ...unknownError } = unknown.body.error;
+    const { requestId: _wrongId, ...wrongPasswordError } = wrongPassword.body.error;
+    expect(unknownError).toEqual(wrongPasswordError);
   });
 
   it("rejects a malformed body with 400 and names the bad fields", async () => {
@@ -105,18 +112,17 @@ describe("GET /api/auth/me", () => {
     expect(res.body.data).toMatchObject({ email: "analyst@test.local", role: "ANALYST" });
   });
 
-  it("accepts the session cookie as well as a bearer header", async () => {
-    const login = await request(app)
-      .post("/api/auth/login")
-      .send({ email: "admin@test.local", password: TEST_PASSWORD });
+  /**
+   * Regression for a CSRF bug: a cookie is sent automatically on a cross-site
+   * request, with no way to require a custom header the way refresh/logout
+   * do. The access token must work only via the header an attacker's page
+   * cannot set on a cross-site request.
+   */
+  it("does not accept a forged access-token cookie as authentication", async () => {
+    const token = await tokenFor(request(app), "admin@test.local");
 
-    // set-cookie is an array; supertest needs a single header value.
-    const raw: string[] = login.headers["set-cookie"] as unknown as string[];
-    const cookie = raw.map((c) => c.split(";")[0]).join("; ");
-
-    const res = await request(app).get("/api/auth/me").set("Cookie", cookie);
-    expect(res.status).toBe(200);
-    expect(res.body.data.email).toBe("admin@test.local");
+    const res = await request(app).get("/api/auth/me").set("Cookie", `drishti_token=${token}`);
+    expect(res.status).toBe(401);
   });
 
   it("rejects a missing token with 401", async () => {
@@ -128,7 +134,7 @@ describe("GET /api/auth/me", () => {
 
 describe("POST /api/auth/logout", () => {
   it("succeeds and clears the cookie", async () => {
-    const res = await request(app).post("/api/auth/logout");
+    const res = await request(app).post("/api/auth/logout").set("X-Drishti-Csrf", "1");
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ ok: true });
     expect(res.headers["set-cookie"]?.[0] ?? "").toContain("drishti_token=;");
@@ -139,14 +145,14 @@ describe("POST /api/auth/logout", () => {
    * behaviour rather than an accident of routing.
    */
   it("is callable without a session, since a logged-out client still has a cookie to clear", async () => {
-    const res = await request(app).post("/api/auth/logout");
+    const res = await request(app).post("/api/auth/logout").set("X-Drishti-Csrf", "1");
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ ok: true });
   });
 
   it("is idempotent — calling it twice is not an error", async () => {
-    await request(app).post("/api/auth/logout");
-    expect((await request(app).post("/api/auth/logout")).status).toBe(200);
+    await request(app).post("/api/auth/logout").set("X-Drishti-Csrf", "1");
+    expect((await request(app).post("/api/auth/logout").set("X-Drishti-Csrf", "1")).status).toBe(200);
   });
 
 });

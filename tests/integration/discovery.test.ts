@@ -286,4 +286,38 @@ describe("reports", () => {
     expect(res.body.data.assets).toMatchObject({ total: 3, assessed: 2, unassessed: 1 });
     expect(res.body.data.assets.assessmentCoverage).toBe(66.7);
   });
+
+  it("generates a PDF carrying the disclaimer and key figures, and audits the generation", async () => {
+    const { PDFParse } = await import("pdf-parse");
+    const res = await get("/api/reports/risk-assessment.pdf");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toBe("application/pdf");
+    expect(res.body.length).toBeGreaterThan(0);
+
+    const parser = new PDFParse({ data: res.body as Buffer });
+    const parsed = await parser.getText();
+    await parser.destroy();
+    expect(parsed.text).toContain("not a compliance score");
+    expect(parsed.text).toContain("Risk band distribution");
+
+    const audit = await prisma.auditEvent.findFirst({
+      where: { organizationId: ids.organizationId, action: "REPORT_GENERATED" },
+      orderBy: { id: "desc" },
+    });
+    expect(audit?.metadata).toMatchObject({ report: "risk-assessment", format: "pdf" });
+  });
+
+  it("generates a CSV of the top risks and audits the generation", async () => {
+    const res = await get("/api/reports/risk-assessment.csv");
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/csv");
+    expect(res.text.split("\r\n")[0]).toBe("Asset,Type,Score,Band");
+
+    const audit = await prisma.auditEvent.findFirst({
+      where: { organizationId: ids.organizationId, action: "REPORT_GENERATED", metadata: { path: ["format"], equals: "csv" } },
+    });
+    expect(audit).not.toBeNull();
+  });
 });

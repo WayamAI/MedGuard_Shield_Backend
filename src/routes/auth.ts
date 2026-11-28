@@ -8,19 +8,29 @@ import {
 import { ok } from "../lib/http.js";
 import { recordAuthEvent, recordAuthEventSafe } from "../services/auditService.js";
 import {
-  ACCESS_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS,
-  login, refreshSession, revokeAllRefreshTokens, revokeRefreshToken,
+  REFRESH_TOKEN_TTL_SECONDS,
+  login, MfaRequiredError, refreshSession, revokeAllRefreshTokens, revokeRefreshToken,
   type SessionResult,
 } from "../services/authService.js";
 import { prisma } from "../lib/prisma.js";
+import { isProduction } from "../config.js";
+import { requireCsrfHeader } from "../middleware/csrf.js";
+import { createSensitiveAuthLimiter } from "../middleware/security.js";
+import { hashRefreshToken, listSessions, revokeOtherSessions, revokeSessionById } from "../services/authService.js";
+import { changePassword, requestPasswordReset, resetPassword } from "../services/passwordResetService.js";
+import { acceptInvite } from "../services/memberService.js";
+import { confirmMfaEnrollment, disableMfa, startMfaEnrollment } from "../services/mfaService.js";
+import { recordAudit } from "../services/auditService.js";
 
 export const authRouter = Router();
 
-const loginBody = z.object({
+export const loginBody = z.object({
   email: z.string().email(),
   password: z.string().min(1, "Password is required"),
   /** Optional: sign in under a specific membership. Defaults to the first. */
   organizationId: z.coerce.number().int().positive().optional(),
+  /** Required on the second call when the first returned MFA_REQUIRED. */
+  mfaCode: z.string().trim().min(1).optional(),
 });
 
 /**
@@ -36,18 +46,24 @@ const loginBody = z.object({
  * "secure", which is exactly what the line above provides.
  */
 function cookieOptions(maxAgeSeconds: number) {
-  const isProd = process.env.NODE_ENV === "production";
   return {
     httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? ("none" as const) : ("lax" as const),
+    secure: isProduction,
+    sameSite: isProduction ? ("none" as const) : ("lax" as const),
     maxAge: maxAgeSeconds * 1000,
     path: "/",
   };
 }
 
+/**
+ * Only the refresh credential is ever a cookie. The access token is returned
+ * in the response body only (see sessionBody below) and must live in memory
+ * on the client — a cookie-borne access token would be sent automatically on
+ * every cross-site request, and unlike refresh/logout there is no practical
+ * way to require a custom CSRF header on every one of the ~50 other mutating
+ * routes. See middleware/auth.ts's extractToken for the enforcement side.
+ */
 function setSessionCookies(res: Parameters<typeof ok>[0], session: SessionResult): void {
-  res.cookie?.(ACCESS_COOKIE, session.token, cookieOptions(ACCESS_TOKEN_TTL_SECONDS));
   res.cookie?.(REFRESH_COOKIE, session.refreshToken, cookieOptions(REFRESH_TOKEN_TTL_SECONDS));
 }
 
@@ -68,10 +84,11 @@ function sessionBody(session: SessionResult) {
 }
 
 authRouter.post("/login", validate({ body: loginBody }), async (req, res, next) => {
-  const { email, password, organizationId } = loginBody.parse(req.body);
+  const { email, password, organizationId, mfaCode } = loginBody.parse(req.body);
   try {
     const session = await login(email, password, {
       organizationId,
+      mfaCode,
       userAgent: req.get("user-agent"),
       ip: req.ip,
     });
@@ -88,6 +105,16 @@ authRouter.post("/login", validate({ body: loginBody }), async (req, res, next) 
 
     ok(res, sessionBody(session));
   } catch (err) {
+    if (err instanceof MfaRequiredError) {
+      // The first call of the two-step flow (no code yet) is not a failure;
+      // only a *wrong* code is. Recording the first as LOGIN_FAILED would
+      // make every MFA-enabled login look like a failed attempt.
+      if (mfaCode) {
+        await recordAuthEventSafe({ action: "MFA_CHALLENGE_FAILED", actorEmail: email, result: "FAILURE", req });
+      }
+      res.status(401).json({ error: { code: err.code, message: err.message, mfaRequired: true } });
+      return;
+    }
     // Recorded even though the request fails -- a failed login is exactly the
     // event a security review asks for. Best-effort so an audit outage cannot
     // turn a rejected login into a 500 that leaks whether the guess was close.
@@ -106,7 +133,7 @@ authRouter.post("/login", validate({ body: loginBody }), async (req, res, next) 
  * exchange; presenting it again revokes every session for that user, because
  * a replayed refresh token means the chain is compromised.
  */
-authRouter.post("/refresh", async (req, res, next) => {
+authRouter.post("/refresh", requireCsrfHeader, async (req, res, next) => {
   try {
     const presented = extractRefreshToken(req);
     if (!presented) {
@@ -135,7 +162,7 @@ authRouter.post("/refresh", async (req, res, next) => {
   }
 });
 
-authRouter.post("/logout", async (req, res, next) => {
+authRouter.post("/logout", requireCsrfHeader, async (req, res, next) => {
   try {
     const presented = extractRefreshToken(req);
     if (presented) await revokeRefreshToken(presented);
@@ -215,6 +242,165 @@ authRouter.get("/me", requireAuth, async (req, res, next) => {
         role: m.role,
       })),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const acceptInviteBody = z.object({
+  token: z.string().min(1),
+  password: z.string().min(10, "Password must be at least 10 characters"),
+});
+
+/** Public: the invite token itself is the credential, and the caller isn't signed in yet. */
+authRouter.post("/accept-invite", createSensitiveAuthLimiter(), validate({ body: acceptInviteBody }), async (req, res, next) => {
+  try {
+    const { token, password } = acceptInviteBody.parse(req.body);
+    const result = await acceptInvite(token, password);
+    await recordAuthEventSafe({
+      action: "MEMBER_INVITE_ACCEPTED",
+      actorEmail: result.email,
+      organizationId: result.organizationId,
+      req,
+    });
+    ok(res, { ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const forgotPasswordBody = z.object({ email: z.string().email() });
+
+/**
+ * Always 200, whether or not the address exists — see the OWASP Forgot
+ * Password cheat sheet. The real work (sending the email) only happens for
+ * a known address, inside `requestPasswordReset`.
+ */
+authRouter.post("/forgot-password", createSensitiveAuthLimiter(), validate({ body: forgotPasswordBody }), async (req, res, next) => {
+  try {
+    const { email } = forgotPasswordBody.parse(req.body);
+    await requestPasswordReset(email);
+    await recordAuthEventSafe({ action: "PASSWORD_RESET_REQUESTED", actorEmail: email, req });
+    ok(res, { ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const resetPasswordBody = z.object({
+  token: z.string().min(1),
+  password: z.string().min(10, "Password must be at least 10 characters"),
+});
+
+authRouter.post("/reset-password", createSensitiveAuthLimiter(), validate({ body: resetPasswordBody }), async (req, res, next) => {
+  try {
+    const { token, password } = resetPasswordBody.parse(req.body);
+    const { userId } = await resetPassword(token, password);
+    // Resetting a password is exactly the moment to kill every existing
+    // session — if the reset was prompted by a leaked credential, a live
+    // session under the old password should not survive it.
+    await revokeAllRefreshTokens(userId);
+    await recordAuthEventSafe({ action: "PASSWORD_RESET_COMPLETED", actorEmail: null, actorUserId: userId, req });
+    ok(res, { ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const changePasswordBody = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(10, "Password must be at least 10 characters"),
+});
+
+authRouter.post("/change-password", requireAuth, validate({ body: changePasswordBody }), async (req, res, next) => {
+  try {
+    const ctx = ctxOf(req);
+    const { currentPassword, newPassword } = changePasswordBody.parse(req.body);
+    await changePassword(ctx.userId, currentPassword, newPassword);
+    await recordAudit(ctx, { action: "PASSWORD_CHANGED", entityType: "User", entityId: ctx.userId, req });
+    ok(res, { ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Starts TOTP enrollment: returns the secret and an otpauth:// URI for a QR code. */
+authRouter.post("/mfa/enroll", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = ctxOf(req);
+    ok(res, await startMfaEnrollment(ctx.userId, ctx.email));
+  } catch (err) {
+    next(err);
+  }
+});
+
+const mfaCodeBody = z.object({ code: z.string().trim().min(1) });
+
+/** Confirms enrollment with a real code from the authenticator app; returns recovery codes once. */
+authRouter.post("/mfa/confirm", requireAuth, validate({ body: mfaCodeBody }), async (req, res, next) => {
+  try {
+    const ctx = ctxOf(req);
+    const { code } = mfaCodeBody.parse(req.body);
+    const { recoveryCodes } = await confirmMfaEnrollment(ctx.userId, code);
+    await recordAudit(ctx, { action: "MFA_ENROLLED", entityType: "User", entityId: ctx.userId, req });
+    ok(res, { recoveryCodes });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const disableMfaBody = z.object({ password: z.string().min(1), code: z.string().trim().min(1) });
+
+authRouter.post("/mfa/disable", requireAuth, validate({ body: disableMfaBody }), async (req, res, next) => {
+  try {
+    const ctx = ctxOf(req);
+    const { password, code } = disableMfaBody.parse(req.body);
+    await disableMfa(ctx.userId, password, code);
+    await recordAudit(ctx, { action: "MFA_DISABLED", entityType: "User", entityId: ctx.userId, req });
+    ok(res, { ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Every session still signed in — one row per live refresh token. */
+authRouter.get("/sessions", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = ctxOf(req);
+    ok(res, await listSessions(ctx.userId));
+  } catch (err) {
+    next(err);
+  }
+});
+
+export const sessionIdParam = z.object({ id: z.coerce.number().int().positive() });
+
+authRouter.post("/sessions/:id/revoke", requireAuth, validate({ params: sessionIdParam }), async (req, res, next) => {
+  try {
+    const ctx = ctxOf(req);
+    const { id } = sessionIdParam.parse(req.params);
+    const revoked = await revokeSessionById(ctx.userId, id);
+    await recordAudit(ctx, { action: "SESSION_REVOKED", entityType: "RefreshToken", entityId: id, req });
+    ok(res, { ok: revoked });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Revokes every session except the one making this request. */
+authRouter.post("/sessions/revoke-others", requireAuth, async (req, res, next) => {
+  try {
+    const ctx = ctxOf(req);
+    const presented = extractRefreshToken(req);
+    if (!presented) {
+      ok(res, { ok: false, revokedSessions: 0 });
+      return;
+    }
+    const revoked = await revokeOtherSessions(ctx.userId, hashRefreshToken(presented));
+    await recordAudit(ctx, {
+      action: "SESSION_REVOKED", entityType: "RefreshToken", metadata: { revokedSessions: revoked }, req,
+    });
+    ok(res, { ok: true, revokedSessions: revoked });
   } catch (err) {
     next(err);
   }

@@ -29,7 +29,7 @@ import type { Role } from "../generated/prisma/client.js";
 
 export type Permission =
   // organisation
-  | "organization:read"
+  | "organization:read" | "organization:settings:update"
   // assets
   | "asset:read" | "asset:create" | "asset:update" | "asset:archive"
   | "asset:assess" | "asset:link-control"
@@ -52,7 +52,13 @@ export type Permission =
   | "remediation:read" | "remediation:create" | "remediation:update"
   | "remediation:transition" | "remediation:assign"
   // risk, audit, import
-  | "risk:read" | "audit:read" | "import:read" | "import:execute";
+  | "risk:read" | "audit:read" | "import:read" | "import:execute"
+  // PHI types (the inventory's categories; not patient data)
+  | "phitype:read" | "phitype:create" | "phitype:update"
+  // Drishti's own users (not the asset-access Identity model)
+  | "member:read" | "member:invite" | "member:update"
+  // Ingestion API keys
+  | "apikey:read" | "apikey:create" | "apikey:revoke";
 
 /**
  * Every permission an ANALYST holds. ADMIN holds all of them plus everything
@@ -94,7 +100,7 @@ const ANALYST_GRANTS: ReadonlySet<Permission> = new Set([
 const READ_PERMISSIONS: ReadonlySet<Permission> = new Set([
   "organization:read", "asset:read", "vendor:read", "identity:read",
   "access:read", "threat:read", "control:read", "policy:read",
-  "remediation:read", "risk:read",
+  "remediation:read", "risk:read", "phitype:read", "member:read",
   // NOT audit:read or import:read -- both are ADMIN-only. The audit trail
   // names who did what from which address, and the import contract describes
   // the shape of the estate.

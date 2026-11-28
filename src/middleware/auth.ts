@@ -4,15 +4,19 @@ import { ForbiddenError, UnauthorizedError, contextFor, verifyToken } from "../s
 import type { TenantContext } from "../lib/tenant.js";
 import { can, rolesWith, type Permission } from "../lib/permissions.js";
 
-/** Current access-token cookie. */
+/**
+ * Never set, as of the CSRF fix below — kept only so `POST /api/auth/logout`
+ * can clear any access-token cookie a browser is still holding from before
+ * that fix shipped. See `extractToken`: it is no longer read either.
+ */
 export const ACCESS_COOKIE = "drishti_token";
 /** Current refresh-token cookie. */
 export const REFRESH_COOKIE = "drishti_refresh";
 /**
- * Pre-rename cookie, still accepted on the way in so a browser holding a
- * MedGuard-era session is not silently logged out by the rebrand. Never set
- * any more — `POST /api/auth/login` issues only the current names, and logout
- * clears both. Remove once no live session can predate the rename.
+ * Pre-rename access-token cookie. Same story as ACCESS_COOKIE above, twice
+ * over: never set since the rebrand, and never read since the CSRF fix.
+ * Kept only so logout can clear a cookie this old if one somehow still
+ * exists.
  */
 export const LEGACY_ACCESS_COOKIE = "medguard_token";
 
@@ -20,21 +24,28 @@ export const LEGACY_ACCESS_COOKIE = "medguard_token";
 function cookieValue(req: Request, name: string): string | null {
   const header = req.get("cookie");
   if (!header) return null;
+  // eslint-disable-next-line security/detect-non-literal-regexp -- `name` is always one of this file's own ACCESS_COOKIE/REFRESH_COOKIE/LEGACY_ACCESS_COOKIE constants, never request-controlled.
   const match = header.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
   return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
 /**
- * Accepts the access token from an Authorization: Bearer header, falling back
- * to a cookie so a browser client can work either way.
+ * Accepts the access token only from an Authorization: Bearer header.
+ *
+ * It used to also fall back to a cookie, which meant every mutating route —
+ * not just refresh/logout — was CSRF-exposed: a cookie is sent by the browser
+ * automatically on a cross-site request, with no custom-header requirement
+ * possible to block it the way `requireCsrfHeader` blocks refresh/logout.
+ * The access token now lives only in memory on the client; only the refresh
+ * credential is ever a cookie, and that cookie-based path still requires the
+ * CSRF header.
  */
 function extractToken(req: Request): string | null {
   const header = req.get("authorization");
   if (header?.toLowerCase().startsWith("bearer ")) {
     return header.slice(7).trim() || null;
   }
-
-  return cookieValue(req, ACCESS_COOKIE) ?? cookieValue(req, LEGACY_ACCESS_COOKIE);
+  return null;
 }
 
 /** The refresh token, which lives only in its httpOnly cookie or the body. */

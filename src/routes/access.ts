@@ -10,13 +10,14 @@ import {
   reviewAccessGrant, revokeAccessGrant, updateAccessGrant,
 } from "../services/accessService.js";
 import { onAssetChanged } from "../services/riskTriggers.js";
+import { maybeSendCsv } from "../lib/csv.js";
 
 export const accessRouter = Router();
 
 const LEVELS = ["READ", "WRITE", "ADMIN"] as const;
-const idParam = z.object({ id: z.coerce.number().int().positive() });
+export const idParam = z.object({ id: z.coerce.number().int().positive() });
 
-const listQuery = paginationQuery.extend({
+export const listQuery = paginationQuery.extend({
   assetId: z.coerce.number().int().positive().optional(),
   identityId: z.coerce.number().int().positive().optional(),
   level: z.enum(LEVELS).optional(),
@@ -25,7 +26,7 @@ const listQuery = paginationQuery.extend({
   search: z.string().trim().min(1).max(120).optional(),
 });
 
-const grantBody = z.object({
+export const grantBody = z.object({
   identityId: z.coerce.number().int().positive(),
   assetId: z.coerce.number().int().positive(),
   level: z.enum(LEVELS).optional(),
@@ -33,7 +34,7 @@ const grantBody = z.object({
   lastUsedAt: z.coerce.date().nullable().optional(),
 });
 
-const patchBody = z
+export const patchBody = z
   .object({
     level: z.enum(LEVELS).optional(),
     lastUsedAt: z.coerce.date().nullable().optional(),
@@ -45,10 +46,25 @@ const patchBody = z
 
 accessRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
+    const ctx = ctxOf(req);
     const q = listQuery.parse(req.query);
+    if (req.query.format === "csv") {
+      const { items: rows } = await listAccessGrants(ctx, q, {});
+      await recordAudit(ctx, { action: "DATA_EXPORTED", entityType: "AccessGrant", metadata: { count: rows.length }, req });
+      maybeSendCsv(req, res, "access-grants.csv", rows, [
+        { header: "ID", value: (g) => g.id },
+        { header: "Identity", value: (g) => g.identityName },
+        { header: "Asset", value: (g) => g.assetName },
+        { header: "Level", value: (g) => g.level },
+        { header: "Granted At", value: (g) => g.grantedAt?.toISOString?.() ?? g.grantedAt },
+        { header: "Last Used", value: (g) => g.lastUsedAt?.toISOString?.() ?? "" },
+        { header: "Flags", value: (g) => g.flags.join("; ") },
+      ]);
+      return;
+    }
     const page = pageParams(q);
-    const { items, total } = await listAccessGrants(ctxOf(req), q, page);
-    paged(res, items, pageMeta(page, total));
+    const { items: pagedItems, total } = await listAccessGrants(ctx, q, page);
+    paged(res, pagedItems, pageMeta(page, total));
   } catch (err) {
     next(err);
   }

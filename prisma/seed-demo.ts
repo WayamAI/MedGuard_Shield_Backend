@@ -390,29 +390,12 @@ async function ensureAudit(
     entityType: input.entityType,
     entityId: input.entityId,
     metadata: input.metadata,
+    // Backdated at insert time -- the table is append-only now (see
+    // add_audit_immutability), so there is no second UPDATE step available
+    // to do this afterward. Set here instead, so the seeded trail still
+    // reads as history rather than a burst of activity at seed time.
+    createdAt: input.createdAt,
   });
-
-  // recordAudit stamps createdAt with now(). Backdating historical entries is
-  // a separate update so the trail reads as a history rather than as a burst
-  // of activity at seed time.
-  if (input.createdAt) {
-    const row = await prisma.auditEvent.findFirst({
-      where: {
-        organizationId: ctx.organizationId,
-        action: input.action,
-        entityType: input.entityType,
-        entityId: input.entityId,
-      },
-      orderBy: { id: "desc" },
-      select: { id: true },
-    });
-    if (row) {
-      await prisma.auditEvent.update({
-        where: { id: row.id },
-        data: { createdAt: input.createdAt },
-      });
-    }
-  }
 
   bump(created, "auditEvents");
   return true;
@@ -425,6 +408,17 @@ export async function seedDemo(options: { quiet?: boolean } = {}): Promise<SeedS
   const log = (...args: unknown[]) => {
     if (!options.quiet) console.log(...args);
   };
+
+  // Demo accounts use a shared, low-entropy password by design (it's read off
+  // a slide during a walkthrough). That is only acceptable in a demo/dev
+  // database, so refuse outright in production rather than trust the caller
+  // to remember not to run this there.
+  if (process.env.NODE_ENV === "production" && process.env.DEMO_SEED_ALLOW_PRODUCTION !== "yes") {
+    throw new Error(
+      "Refusing to seed demo users with NODE_ENV=production. " +
+      "Set DEMO_SEED_ALLOW_PRODUCTION=yes if that is genuinely what you want.",
+    );
+  }
 
   const password = process.env.DEMO_USER_PASSWORD;
   if (!password) {
@@ -833,20 +827,24 @@ export async function seedDemo(options: { quiet?: boolean } = {}): Promise<SeedS
     log(`  ${k.padEnd(21)}  ${String(created[k] ?? 0).padStart(7)}   ${String(reused[k] ?? 0).padStart(15)}`);
   }
 
-  const totals = await prisma.$transaction([
-    prisma.asset.count({ where: { organizationId } }),
-    prisma.vendor.count({ where: { organizationId } }),
-    prisma.control.count({ where: { organizationId } }),
-    prisma.policy.count({ where: { organizationId } }),
-    prisma.remediation.count({ where: { organizationId } }),
-    prisma.riskHistory.count({ where: { organizationId } }),
-    prisma.auditEvent.count({ where: { organizationId } }),
-  ]);
+  // Plain sequential reads, not a transaction: this is a final reporting
+  // count with no atomicity requirement (everything it counts was already
+  // committed above), so each call can take its own pooled connection
+  // instead of sharing one -- the batch-array `$transaction([...])` form
+  // was the actual source of the "client.query() already executing"
+  // deprecation warning seen under test, reproducible only in that shape.
+  const assetTotal = await prisma.asset.count({ where: { organizationId } });
+  const vendorTotal = await prisma.vendor.count({ where: { organizationId } });
+  const controlTotal = await prisma.control.count({ where: { organizationId } });
+  const policyTotal = await prisma.policy.count({ where: { organizationId } });
+  const remediationTotal = await prisma.remediation.count({ where: { organizationId } });
+  const riskHistoryTotal = await prisma.riskHistory.count({ where: { organizationId } });
+  const auditEventTotal = await prisma.auditEvent.count({ where: { organizationId } });
   log(
     `\n[demo-seed] org ${organizationId} now holds: ` +
-    `${totals[0]} assets, ${totals[1]} vendors, ${totals[2]} controls, ` +
-    `${totals[3]} policies, ${totals[4]} remediations, ` +
-    `${totals[5]} risk-history entries, ${totals[6]} audit events.`,
+    `${assetTotal} assets, ${vendorTotal} vendors, ${controlTotal} controls, ` +
+    `${policyTotal} policies, ${remediationTotal} remediations, ` +
+    `${riskHistoryTotal} risk-history entries, ${auditEventTotal} audit events.`,
   );
   log(
     `[demo-seed] sign in as admin@${ORG_SLUG}.invalid / analyst@${ORG_SLUG}.invalid ` +

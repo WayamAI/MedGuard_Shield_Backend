@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import ExcelJS from "exceljs";
 import request from "supertest";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
@@ -59,6 +61,28 @@ const validate = (entity: string, csv: string, token = tokens.ADMIN, filename?: 
 const doImport = (entity: string, csv: string, token = tokens.ADMIN, filename?: string) =>
   upload(`/api/import/${entity}`, csv, token, filename);
 
+/** Attaches `buffer` as a multipart upload with an .xlsx (or overridden) filename. */
+function uploadXlsx(path: string, buffer: Buffer, token: string, filename = "data.xlsx") {
+  return request(app)
+    .post(path)
+    .set("Authorization", `Bearer ${token}`)
+    .attach("file", buffer, { filename, contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+const validateXlsx = (entity: string, buffer: Buffer, token = tokens.ADMIN, filename?: string) =>
+  uploadXlsx(`/api/import/${entity}/validate`, buffer, token, filename);
+
+const doImportXlsx = (entity: string, buffer: Buffer, token = tokens.ADMIN, filename?: string) =>
+  uploadXlsx(`/api/import/${entity}`, buffer, token, filename);
+
+async function rowsToXlsx(header: string[], rows: (string | number | boolean)[][]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("data");
+  sheet.addRow(header);
+  for (const row of rows) sheet.addRow(row);
+  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+}
+
 const ASSET_HEADER = "name,type,phiVolume,encrypted,mfaEnabled,lastAssessedAt";
 const TWO_ASSETS =
   `${ASSET_HEADER}\n` +
@@ -87,6 +111,26 @@ describe("GET /api/import/:entity/template", () => {
       .set("Authorization", `Bearer ${tokens.ADMIN}`);
 
     const res = await validate("vendors", template.text);
+    expect(res.status).toBe(200);
+    expect(res.body.data.valid).toBe(true);
+  });
+
+  it("serves an .xlsx template with ?format=xlsx that round-trips", async () => {
+    const template = await request(app)
+      .get("/api/import/vendors/template?format=xlsx")
+      .set("Authorization", `Bearer ${tokens.ADMIN}`)
+      .buffer()
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => callback(null, Buffer.concat(chunks)));
+      });
+
+    expect(template.status).toBe(200);
+    expect(template.headers["content-type"]).toContain("spreadsheetml.sheet");
+    expect(template.headers["content-disposition"]).toContain("drishti-vendors-template.xlsx");
+
+    const res = await validateXlsx("vendors", template.body as Buffer);
     expect(res.status).toBe(200);
     expect(res.body.data.valid).toBe(true);
   });
@@ -493,15 +537,23 @@ describe("foreign keys by natural key", () => {
 });
 
 describe("file handling safety", () => {
-  it("rejects a file that is not named .csv", async () => {
+  it("rejects a file that is not named .csv or .xlsx", async () => {
     const res = await doImport("assets", TWO_ASSETS, tokens.ADMIN, "payload.txt");
     expect(res.status).toBe(400);
-    expect(res.body.error.message).toContain("Only .csv files");
+    expect(res.body.error.message).toContain("Only .csv or .xlsx files");
   });
 
   it("rejects an executable-looking upload", async () => {
     const res = await doImport("assets", TWO_ASSETS, tokens.ADMIN, "evil.csv.exe");
     expect(res.status).toBe(400);
+  });
+
+  it("rejects a macro-enabled .xlsm workbook", async () => {
+    const buffer = await rowsToXlsx(ASSET_HEADER.split(","), [["Imported Asset", "API", 1, true, true]]);
+    const res = await doImportXlsx("assets", buffer, tokens.ADMIN, "payload.xlsm");
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toContain("Only .csv or .xlsx files");
+    expect(await prisma.asset.count({ where: { name: "Imported Asset" } })).toBe(0);
   });
 
   it("rejects a file over the 2MB limit with 413", async () => {
@@ -517,6 +569,60 @@ describe("file handling safety", () => {
     expect(res.status).toBe(413);
     expect(res.body.error.code).toBe("FILE_TOO_LARGE");
     expect(await prisma.asset.count({ where: { name: "Asset 0" } })).toBe(0);
+  });
+
+  it("rejects an .xlsx file over the 2MB limit with 413", async () => {
+    // xlsx is a zip, so the padding has to be incompressible (true random
+    // bytes, not a repeated pattern) to actually push the file past 2MB. One
+    // oversized cell keeps both the row count and the compression work small.
+    const pad = randomBytes(2.2 * 1024 * 1024).toString("hex");
+    const buffer = await rowsToXlsx(ASSET_HEADER.split(","), [[`Asset ${pad}`, "API", 1, true, true]]);
+    expect(buffer.byteLength).toBeGreaterThan(2 * 1024 * 1024);
+
+    const res = await doImportXlsx("assets", buffer);
+
+    expect(res.status).toBe(413);
+    expect(res.body.error.code).toBe("FILE_TOO_LARGE");
+    expect(await prisma.asset.count({ where: { name: "Asset 0" } })).toBe(0);
+  });
+
+  it("imports an .xlsx file to exactly the same records as the equivalent CSV", async () => {
+    const buffer = await rowsToXlsx(ASSET_HEADER.split(","), [
+      ["Imported Portal", "OTHER", 1200, true, true, "2026-08-01"],
+      ["Imported Lab API", "API", 64200, true, false, ""],
+    ]);
+
+    const res = await doImportXlsx("assets", buffer);
+    expect(res.status).toBe(201);
+    expect(res.body.data.imported).toBe(2);
+
+    const csvRes = await doImport("phi-types", "name,sensitivity\nUnused,LOW\n");
+    expect(csvRes.status).toBe(201);
+
+    const portal = await prisma.asset.findFirst({ where: { name: "Imported Portal" } });
+    expect(portal).toMatchObject({ type: "OTHER", phiVolume: 1200, encrypted: true, mfaEnabled: true });
+    const lab = await prisma.asset.findFirst({ where: { name: "Imported Lab API" } });
+    expect(lab).toMatchObject({ type: "API", phiVolume: 64200, encrypted: true, mfaEnabled: false, lastAssessedAt: null });
+  });
+
+  it("a bad .xlsx returns row/field errors and writes nothing", async () => {
+    const buffer = await rowsToXlsx(ASSET_HEADER.split(","), [["Imported Portal", "NOPE", 1200, true, true, ""]]);
+
+    const res = await doImportXlsx("assets", buffer);
+    expect(res.status).toBe(400);
+    expect(res.body.error.report.errors).toEqual([
+      expect.objectContaining({ row: 2, field: "type" }),
+    ]);
+    expect(await prisma.asset.count({ where: { name: "Imported Portal" } })).toBe(0);
+  });
+
+  it("validates an .xlsx file as a dry run, writing nothing", async () => {
+    const buffer = await rowsToXlsx(ASSET_HEADER.split(","), [["Imported Portal", "OTHER", 1200, true, true, ""]]);
+
+    const res = await validateXlsx("assets", buffer);
+    expect(res.status).toBe(200);
+    expect(res.body.data.valid).toBe(true);
+    expect(await prisma.asset.count({ where: { name: "Imported Portal" } })).toBe(0);
   });
 
   it("treats a formula cell as a problem, not as something to run", async () => {

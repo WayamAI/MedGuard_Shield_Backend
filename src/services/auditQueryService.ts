@@ -1,6 +1,7 @@
 import type { AuditAction, Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { scope, type TenantContext } from "../lib/tenant.js";
+import { computeRowHash, type AuditRow } from "./auditService.js";
 
 /**
  * Read side of the audit trail. There is deliberately no update or delete
@@ -72,4 +73,43 @@ export async function entityHistory(
   page: { skip?: number; take?: number } = {},
 ) {
   return listAuditEvents(ctx, { entityType, entityId }, page);
+}
+
+/**
+ * Walks this organization's audit rows in insertion order, recomputing each
+ * row's hash from the one before it and comparing against what was stored.
+ * The first mismatch is where the chain broke — either the row itself was
+ * altered, or a row was deleted/inserted out of band (the hash trigger
+ * already stops normal UPDATE/DELETE; this catches tampering at a lower
+ * level, like a direct table rewrite with triggers disabled).
+ */
+export async function verifyAuditChain(ctx: TenantContext) {
+  const rows = await prisma.auditEvent.findMany({
+    where: scope(ctx),
+    orderBy: { id: "asc" },
+  });
+
+  let expectedPrevHash = "";
+  for (const row of rows) {
+    const content: AuditRow = {
+      organizationId: row.organizationId,
+      actorUserId: row.actorUserId,
+      actorEmail: row.actorEmail,
+      action: row.action,
+      entityType: row.entityType,
+      entityId: row.entityId,
+      result: row.result,
+      metadata: (row.metadata as object | null) ?? undefined,
+      ip: row.ip,
+      userAgent: row.userAgent,
+    };
+    const expectedHash = computeRowHash(expectedPrevHash, content, row.createdAt);
+
+    if (row.prevHash !== expectedPrevHash || row.hash !== expectedHash) {
+      return { intact: false, checked: rows.length, firstBrokenId: row.id };
+    }
+    expectedPrevHash = row.hash ?? "";
+  }
+
+  return { intact: true, checked: rows.length, firstBrokenId: null };
 }

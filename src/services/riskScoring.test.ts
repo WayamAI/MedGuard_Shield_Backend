@@ -1,5 +1,9 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { bandForScore, computeRisk, MAX_RAW_SCORE } from "./riskScoring.js";
+
+const factor = fc.integer({ min: 1, max: 5 });
+const factors = fc.tuple(factor, factor, factor, factor);
 
 describe("computeRisk", () => {
   it("scores a known input against the documented formula", () => {
@@ -64,5 +68,43 @@ describe("bandForScore", () => {
     for (const [l, i, e, c, band] of cases) {
       expect(computeRisk(l, i, e, c).band, `${l}/${i}/${e}/${c}`).toBe(band);
     }
+  });
+});
+
+describe("computeRisk — properties", () => {
+  it("score is always in [0, 100] for every valid factor combination", () => {
+    fc.assert(
+      fc.property(factors, ([l, i, e, c]) => {
+        const { score } = computeRisk(l, i, e, c);
+        return score >= 0 && score <= 100;
+      }),
+    );
+  });
+
+  it("is deterministic — the same inputs always produce the same output", () => {
+    fc.assert(
+      fc.property(factors, ([l, i, e, c]) => {
+        const a = computeRisk(l, i, e, c);
+        const b = computeRisk(l, i, e, c);
+        return a.score === b.score && a.band === b.band;
+      }),
+    );
+  });
+
+  it("is monotonic — raising any one factor never lowers the score", () => {
+    fc.assert(
+      fc.property(factors, fc.integer({ min: 0, max: 3 }), (base, factorIndex) => {
+        const [l, i, e, c] = base;
+        const current = base[factorIndex];
+        fc.pre(current < 5);
+
+        const raised = [...base] as [number, number, number, number];
+        raised[factorIndex] = current + 1;
+
+        const before = computeRisk(l, i, e, c).score;
+        const after = computeRisk(...raised).score;
+        return after >= before;
+      }),
+    );
   });
 });

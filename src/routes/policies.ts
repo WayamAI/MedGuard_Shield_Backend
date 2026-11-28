@@ -5,6 +5,7 @@ import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { created, ok, paged } from "../lib/http.js";
 import { pageMeta, pageParams, paginationQuery } from "../lib/pagination.js";
 import { diffFields, recordAudit } from "../services/auditService.js";
+import { maybeSendCsv } from "../lib/csv.js";
 import {
   archivePolicy, createPolicy, getPolicyById, listPolicies, setPolicyControl, updatePolicy,
 } from "../services/policyService.js";
@@ -12,15 +13,15 @@ import {
 export const policiesRouter = Router();
 
 const STATUSES = ["DRAFT", "ACTIVE", "UNDER_REVIEW", "ARCHIVED"] as const;
-const idParam = z.object({ id: z.coerce.number().int().positive() });
+export const idParam = z.object({ id: z.coerce.number().int().positive() });
 
-const listQuery = paginationQuery.extend({
+export const listQuery = paginationQuery.extend({
   search: z.string().trim().min(1).max(120).optional(),
   status: z.enum(STATUSES).optional(),
   includeArchived: z.coerce.boolean().optional(),
 });
 
-const createBody = z.object({
+export const createBody = z.object({
   name: z.string().trim().min(1).max(160),
   description: z.string().trim().min(1).max(4000),
   status: z.enum(STATUSES).optional(),
@@ -29,7 +30,7 @@ const createBody = z.object({
   reviewDueAt: z.coerce.date().nullable().optional(),
 });
 
-const patchBody = createBody.partial().refine(
+export const patchBody = createBody.partial().refine(
   (v) => Object.keys(v).length > 0,
   { message: "Provide at least one field to update" },
 );
@@ -37,9 +38,24 @@ const patchBody = createBody.partial().refine(
 
 policiesRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {
+    const ctx = ctxOf(req);
     const q = listQuery.parse(req.query);
+    if (req.query.format === "csv") {
+      const { items } = await listPolicies(ctx, q, {});
+      await recordAudit(ctx, { action: "DATA_EXPORTED", entityType: "Policy", metadata: { count: items.length }, req });
+      maybeSendCsv(req, res, "policies.csv", items, [
+        { header: "ID", value: (p) => p.id },
+        { header: "Name", value: (p) => p.name },
+        { header: "Status", value: (p) => p.status },
+        { header: "Owner", value: (p) => p.owner ?? "" },
+        { header: "Review Due", value: (p) => p.reviewDueAt?.toISOString?.() ?? "" },
+        { header: "Review Overdue", value: (p) => p.reviewOverdue },
+        { header: "Control Count", value: (p) => p.controlCount },
+      ]);
+      return;
+    }
     const page = pageParams(q);
-    const { items, total } = await listPolicies(ctxOf(req), q, page);
+    const { items, total } = await listPolicies(ctx, q, page);
     paged(res, items, pageMeta(page, total));
   } catch (err) {
     next(err);
@@ -103,7 +119,7 @@ policiesRouter.post("/:id/archive", requirePermission("policy:archive"), validat
   }
 });
 
-const linkParams = z.object({
+export const linkParams = z.object({
   id: z.coerce.number().int().positive(),
   controlId: z.coerce.number().int().positive(),
 });

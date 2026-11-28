@@ -1,0 +1,154 @@
+# ZAP Automation Framework plan for the Drishti API.
+#
+# Run against a locally running instance (npm run build && npm start, or
+# npm run dev), seeded (npm run db:seed), with openapi.json up to date
+# (npm run openapi:generate). Two ways to run it:
+#
+#   Native (brew install --cask zap):
+#     zap.sh -cmd -autorun security/zap/automation-plan.yaml
+#
+#   CI: the `zap` job in .github/workflows/ci.yml, which runs this same
+#   file through the official ghcr.io/zaproxy/zaproxy:stable Docker image
+#   directly (not one of the zaproxy/action-* marketplace actions — those
+#   don't take an arbitrary custom Automation Framework plan).
+#
+# Authentication: the API authenticates every mutating route via an
+# Authorization: Bearer header only (see src/middleware/auth.ts) — no
+# session cookie ZAP could just carry forward. The replacer job below
+# injects a fixed bearer token into every request ZAP makes; the CI job
+# fetches that token with a real login call and substitutes it in via
+# envsubst before invoking ZAP (see .github/workflows/ci.yml's `zap` job).
+# That same step also fetches one real id per entity type (DRISHTI_ASSET_ID,
+# DRISHTI_VENDOR_ID, ...) for the `requestor` job below. Running this
+# natively, export all of them yourself first:
+#
+#   TOKEN=$(curl -s localhost:4000/api/auth/login \
+#     -H 'Content-Type: application/json' \
+#     -d "{\"email\":\"admin@wayam.ai\",\"password\":\"$DEMO_USER_PASSWORD\"}" \
+#     | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["token"])')
+#   export DRISHTI_ZAP_TOKEN="$TOKEN"
+#   export DRISHTI_ASSET_ID=1 DRISHTI_VENDOR_ID=1 DRISHTI_IDENTITY_ID=1 \
+#          DRISHTI_THREAT_ID=1 DRISHTI_CONTROL_ID=1 DRISHTI_POLICY_ID=1 \
+#          DRISHTI_REMEDIATION_ID=1 DRISHTI_ACCESS_ID=1 DRISHTI_PHITYPE_ID=1
+#   envsubst < security/zap/automation-plan.yaml > /tmp/zap-plan.yaml
+#   zap.sh -cmd -autorun /tmp/zap-plan.yaml
+
+env:
+  contexts:
+    - name: "Drishti API"
+      # The spider job apparently starts from this list, not its own "url"
+      # parameter (confirmed: setting the spider job's url to a real
+      # endpoint had no effect — the log still showed "Job spider
+      # requesting URL http://localhost:4000/api", the bare root, which
+      # 404s). This has to be a real, reachable endpoint for the same
+      # reason the spider job's url did.
+      urls:
+        - "http://localhost:4000/api/assets"
+      includePaths:
+        - "http://localhost:4000/api/.*"
+      excludePaths:
+        # Never actively probe the two destructive, demo-only reset paths
+        # from an automated scan.
+        - "http://localhost:4000/api/import/.*"
+        - "http://localhost:4000/api/ingest/.*"
+  parameters:
+    failOnError: true
+    failOnWarning: false
+    progressToStdout: true
+
+jobs:
+  - type: replacer
+    parameters: {}
+    rules:
+      - description: "Bearer auth for every request ZAP makes"
+        url: ""
+        matchType: req_header
+        matchString: "Authorization"
+        matchRegex: false
+        replacementString: "Bearer ${DRISHTI_ZAP_TOKEN}"
+
+  - type: openapi
+    parameters:
+      apiFile: "openapi.json"
+      # Root, not "/api": every path inside openapi.json already starts
+      # with /api (its own servers.url is the relative "/api"), so a
+      # targetUrl that also ends in /api made ZAP request
+      # /api/api/<everything> and 404 on literally every single request —
+      # confirmed in the first real CI run of this plan: 192 "endpoints"
+      # discovered (double the real 97, from some kind of double-counting
+      # artifact of that), 100% of responses 4xx, and both of the two
+      # alerts found pointed at an /api/api/... URL. The scan ran; it just
+      # never touched anything real.
+      targetUrl: "http://localhost:4000"
+      context: "Drishti API"
+
+  - type: passiveScan-config
+    parameters:
+      maxBodySizeInBytesToScan: 100000
+
+  - type: spider
+    parameters:
+      context: "Drishti API"
+      # A real endpoint, not the bare "/api" root — there is no GET /api
+      # handler (every route is mounted at /api/<something>), so the spider
+      # 404s on its very first request otherwise. Confirmed live: this was
+      # the one real cause left behind an otherwise-clean CI run (exit code
+      # 2, "Job spider error accessing URL http://localhost:4000/api status
+      # code returned: 404 expected 200" in the automation plan's own
+      # warnings) once the /api-doubling bug above was fixed.
+      url: "http://localhost:4000/api/assets"
+      maxDuration: 5
+
+  # ID-scoped routes (GET/PATCH/.../:id) otherwise only ever see whatever
+  # placeholder id ZAP's openapi importer defaults path params to, which
+  # almost never exists in the seeded data and 404s before the active
+  # scanner's injection rules ever reach the handler's real logic. These
+  # requests use real ids from the seeded Meridian data (CI fetches them
+  # live after seeding — see .github/workflows/ci.yml's "Log in, fetch
+  # real resource ids" step; running natively, export the same
+  # DRISHTI_*_ID vars yourself first) so ZAP's history — and therefore the
+  # active scan that follows — actually includes a reachable 200 for each
+  # entity type, not just the list endpoints.
+  - type: requestor
+    parameters:
+      user: ""
+    requests:
+      - url: "http://localhost:4000/api/assets/${DRISHTI_ASSET_ID}"
+      - url: "http://localhost:4000/api/vendors/${DRISHTI_VENDOR_ID}"
+      - url: "http://localhost:4000/api/identities/${DRISHTI_IDENTITY_ID}"
+      - url: "http://localhost:4000/api/threats/${DRISHTI_THREAT_ID}"
+      - url: "http://localhost:4000/api/controls/${DRISHTI_CONTROL_ID}"
+      - url: "http://localhost:4000/api/policies/${DRISHTI_POLICY_ID}"
+      - url: "http://localhost:4000/api/remediations/${DRISHTI_REMEDIATION_ID}"
+      - url: "http://localhost:4000/api/access/${DRISHTI_ACCESS_ID}"
+      - url: "http://localhost:4000/api/phi-types/${DRISHTI_PHITYPE_ID}"
+
+  - type: passiveScan-wait
+    parameters:
+      maxDuration: 5
+
+  - type: activeScan
+    parameters:
+      context: "Drishti API"
+      policy: "Default Policy"
+    # Everything ingest/import can do is already exercised and audited
+    # elsewhere (Phase 3's SECURITY_REVIEW.md, tests/integration/
+    # ingest.test.ts, api-key-scope.test.ts); the context excludePaths
+    # above keep an active scan from fuzzing a bulk-write endpoint.
+
+  - type: report
+    parameters:
+      template: "traditional-json"
+      # "." here, not "security/zap": the CI job mounts /tmp as /zap/wrk
+      # (see .github/workflows/ci.yml's "Run ZAP" step) and its "Upload ZAP
+      # report" step reads the result straight out of /tmp/zap-report.json,
+      # so the report has to land at the mount's root. Running this plan
+      # natively instead, point reportDir wherever's convenient.
+      reportDir: "."
+      reportFile: "zap-report"
+      reportTitle: "Drishti API — ZAP baseline/active scan"
+    risks:
+      - high
+      - medium
+      - low
+      - info

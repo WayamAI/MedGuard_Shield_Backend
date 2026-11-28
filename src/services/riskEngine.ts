@@ -2,6 +2,7 @@ import type { Prisma, RiskBand, RiskChangeReason, RiskSubject } from "../generat
 import { prisma } from "../lib/prisma.js";
 import { NotFoundError } from "../lib/errors.js";
 import { scope, type TenantContext } from "../lib/tenant.js";
+import { getOrgSettings } from "./orgSettingsService.js";
 import { computeRisk } from "./riskScoring.js";
 import {
   deriveAssetExposure, deriveControlGap, deriveVendorControlGap, deriveVendorExposure,
@@ -135,9 +136,7 @@ async function deriveForAsset(db: Db, assetId: number) {
   };
 }
 
-const ASSESSMENT_INTERVAL_DAYS = 365;
-
-async function deriveForVendor(db: Db, vendorId: number) {
+async function deriveForVendor(db: Db, vendorId: number, assessmentCadenceDays: number) {
   const vendor = await db.vendor.findUnique({
     where: { id: vendorId },
     select: {
@@ -150,7 +149,7 @@ async function deriveForVendor(db: Db, vendorId: number) {
   const assets = vendor.assetAccess.map((a) => a.asset);
   const overdue =
     vendor.lastAssessedAt === null ||
-    (Date.now() - vendor.lastAssessedAt.getTime()) / 86_400_000 > ASSESSMENT_INTERVAL_DAYS;
+    (Date.now() - vendor.lastAssessedAt.getTime()) / 86_400_000 > assessmentCadenceDays;
 
   return {
     name: vendor.name,
@@ -198,7 +197,11 @@ async function apply(db: Db, ctx: TenantContext, args: ApplyArgs): Promise<RiskS
 
   const derived = isAsset
     ? await deriveForAsset(db, args.subjectId)
-    : await deriveForVendor(db, args.subjectId);
+    : await deriveForVendor(
+        db,
+        args.subjectId,
+        (await getOrgSettings(ctx.organizationId)).assessmentCadenceDays,
+      );
 
   const existing = isAsset
     ? await db.risk.findUnique({ where: { assetId: args.subjectId } })

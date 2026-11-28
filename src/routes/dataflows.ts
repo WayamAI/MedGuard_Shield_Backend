@@ -8,12 +8,12 @@ import { getDataFlowById, listDataFlows } from "../services/dataFlowService.js";
 
 export const dataFlowsRouter = Router();
 
-const listQuery = paginationQuery.extend({
+export const listQuery = paginationQuery.extend({
   status: z.enum(["ok", "warn", "violation"]).optional(),
   assetId: z.coerce.number().int().positive().optional(),
 });
 
-const idParam = z.object({ id: z.coerce.number().int().positive() });
+export const idParam = z.object({ id: z.coerce.number().int().positive() });
 
 dataFlowsRouter.get("/", validate({ query: listQuery }), async (req, res, next) => {
   try {

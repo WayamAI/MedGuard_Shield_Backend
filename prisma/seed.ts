@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { pathToFileURL } from "node:url";
 import type {
   AccessLevel, AssetType, BaaStatus, IdentityKind, Sensitivity,
   ThreatSeverity, ThreatStatus,
@@ -106,6 +107,10 @@ const USERS: Array<{ email: string; role: "ADMIN" | "ANALYST" | "VIEWER" }> = [
   { email: "admin@meridian.org", role: "ADMIN" },
   { email: "f.alrashid@meridian.org", role: "ANALYST" },
   { email: "a.patel@meridian.org", role: "VIEWER" },
+  // wayam.ai-branded aliases for the same three roles, same org, same password.
+  { email: "admin@wayam.ai", role: "ADMIN" },
+  { email: "analyst@wayam.ai", role: "ANALYST" },
+  { email: "viewer@wayam.ai", role: "VIEWER" },
 ];
 
 /**
@@ -419,7 +424,19 @@ const REMEDIATIONS: Array<{
 const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000);
 
-async function main() {
+export async function main() {
+  // This script TRUNCATEs real tables and creates accounts with a shared,
+  // low-entropy password (DEMO_USER_PASSWORD) -- fine for a demo database,
+  // never acceptable against production. Same override pattern as
+  // seed-demo.ts, for the same reason: refuse outright rather than trust
+  // the caller to remember not to run this there.
+  if (process.env.NODE_ENV === "production" && process.env.SEED_ALLOW_PRODUCTION !== "yes") {
+    throw new Error(
+      "Refusing to run this destructive demo seed with NODE_ENV=production. " +
+      "Set SEED_ALLOW_PRODUCTION=yes if that is genuinely what you want.",
+    );
+  }
+
   // Idempotent, and RESTART IDENTITY keeps primary keys stable across
   // reseeds -- deleteMany() would leave the sequences advanced, so every
   // reseed would shift every id and break any link the frontend had saved.
@@ -719,9 +736,14 @@ async function main() {
   );
 }
 
-main()
-  .catch((err) => {
-    console.error("[seed] failed:", err);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+// Only auto-run when invoked directly (`npm run db:seed`), not when imported
+// — `tests/integration/meridian-seed.test.ts` imports `main` to exercise this
+// script's output without triggering a second run or an unwanted disconnect.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main()
+    .catch((err) => {
+      console.error("[seed] failed:", err);
+      process.exit(1);
+    })
+    .finally(() => prisma.$disconnect());
+}
