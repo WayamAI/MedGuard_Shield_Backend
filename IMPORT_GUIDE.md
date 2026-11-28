@@ -1,7 +1,12 @@
-# MedGuard — CSV Import Guide
+# MedGuard — CSV/XLSX Import Guide
 
 How to load real data into MedGuard from a spreadsheet, without a developer
 editing `prisma/seed.ts`.
+
+Files can be either **`.csv`** or **`.xlsx`**. Both go through the identical
+validation and import pipeline — an `.xlsx` upload is read into exactly the
+same rows a CSV with the same columns would produce, then validated and
+committed the same way.
 
 There are seven importable entities, one file per entity. There is no combined
 file: a single sheet holding assets and the flows between them cannot express
@@ -15,7 +20,7 @@ whole difficulty.
 | Method | Path | What it does |
 |---|---|---|
 | `GET` | `/api/import` | The column contract for all seven entities, as JSON. |
-| `GET` | `/api/import/:entity/template` | Downloads a CSV with the header row and one filled-in example row. |
+| `GET` | `/api/import/:entity/template` | Downloads a CSV with the header row and one filled-in example row. Add `?format=xlsx` for an `.xlsx` workbook instead. |
 | `POST` | `/api/import/:entity/validate` | Dry run. Parses and checks everything, writes nothing. |
 | `POST` | `/api/import/:entity` | Imports for real, in a single transaction. |
 
@@ -273,14 +278,18 @@ needed because the column was filled in.
 
 ## File handling and safety
 
-- **`.csv` only**, by filename. Anything else is refused with 400.
-- **2MB maximum.** Larger uploads are refused with `413 FILE_TOO_LARGE` before
-  the file is parsed. That is roughly 20,000 rows — well past a realistic
-  estate.
+- **`.csv` or `.xlsx` only**, by filename. Anything else — including `.xlsm`
+  and any other macro-enabled or unrecognized extension — is refused with 400.
+- **2MB maximum**, for either format. Larger uploads are refused with
+  `413 FILE_TOO_LARGE` before the file is parsed. That is roughly 20,000 CSV
+  rows — well past a realistic estate.
 - Files are held **in memory** and never written to disk.
 - **No cell is ever executed or evaluated.** Every value is coerced to a string,
   number, boolean or date and handed to Prisma as a bound parameter. A name
-  containing SQL is stored as text, exactly as typed.
+  containing SQL is stored as text, exactly as typed. An `.xlsx` formula cell
+  is read as its cached result — the value Excel itself last computed when the
+  file was saved — never evaluated by the server.
+- For `.xlsx`, only the **first worksheet** is read.
 - **Formula-injection guard.** A text cell starting with `=`, `+`, `-`, `@`, a
   tab or a carriage return is **rejected**, because MedGuard renders these
   strings back into a UI and will export them to CSV again, and a value that

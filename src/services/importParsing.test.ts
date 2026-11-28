@@ -1,5 +1,6 @@
+import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
-import { buildCsv, escapeCsvValue, naturalKeyOf, parseCsv, templateCsv } from "./importParsing.js";
+import { buildCsv, escapeCsvValue, naturalKeyOf, parseCsv, parseXlsx, templateCsv, templateXlsx } from "./importParsing.js";
 import { specFor } from "./importSpec.js";
 
 /**
@@ -30,6 +31,68 @@ describe("templateCsv", () => {
       expect(result.errors, `${slug} template should self-validate`).toEqual([]);
       expect(result.rows).toHaveLength(1);
     }
+  });
+});
+
+/** Builds an xlsx workbook buffer the way a user's spreadsheet app would. */
+async function rowsToXlsx(header: string[], rows: (string | number | boolean | Date)[][]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("data");
+  sheet.addRow(header);
+  for (const row of rows) sheet.addRow(row);
+  return (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+}
+
+const ASSET_ROW = ["Epic EHR Core", "EHR", 412000, true, true, new Date("2026-08-14T00:00:00.000Z")];
+
+describe("templateXlsx", () => {
+  it("produces a workbook that parses cleanly through its own validator", async () => {
+    for (const slug of ["assets", "phi-types", "data-flows", "vendors", "access-grants", "threats", "risks"]) {
+      const spec = specFor(slug)!;
+      const result = await parseXlsx(spec, await templateXlsx(spec));
+      expect(result.errors, `${slug} xlsx template should self-validate`).toEqual([]);
+      expect(result.rows).toHaveLength(1);
+    }
+  });
+});
+
+describe("parseXlsx", () => {
+  it("parses the same record an equivalent CSV would", async () => {
+    const csvHeader = ASSET_HEADER.split(",");
+    const xlsx = await rowsToXlsx(csvHeader, [ASSET_ROW]);
+
+    const fromXlsx = await parseXlsx(assets, xlsx);
+    const fromCsv = parseCsv(assets, `${ASSET_HEADER}\nEpic EHR Core,EHR,412000,true,true,2026-08-14\n`);
+
+    expect(fromXlsx.errors).toEqual([]);
+    expect(fromXlsx.rows).toEqual(fromCsv.rows);
+  });
+
+  it("reports row/field errors and parses nothing on a bad workbook", async () => {
+    const xlsx = await rowsToXlsx(ASSET_HEADER.split(","), [["Epic EHR Core", "NOPE", 1, true, true, ""]]);
+    const result = await parseXlsx(assets, xlsx);
+
+    expect(result.rows).toEqual([]);
+    expect(result.errors).toEqual([{ row: 2, field: "type", message: expect.stringContaining("NOPE") }]);
+  });
+
+  it("rejects an unreadable buffer instead of throwing", async () => {
+    const result = await parseXlsx(assets, Buffer.from("not a workbook"));
+    expect(result.rows).toEqual([]);
+    expect(result.errors[0]?.message).toContain("could not be parsed");
+  });
+
+  it("reads a formula cell's cached result rather than evaluating anything", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("data");
+    sheet.addRow(ASSET_HEADER.split(","));
+    const row = sheet.addRow(["", "EHR", 1, true, true, ""]);
+    row.getCell(1).value = { formula: "CONCATENATE(\"Epic\",\" EHR Core\")", result: "Epic EHR Core" };
+    const buffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
+
+    const result = await parseXlsx(assets, buffer);
+    expect(result.errors).toEqual([]);
+    expect(result.rows[0]?.name).toBe("Epic EHR Core");
   });
 });
 

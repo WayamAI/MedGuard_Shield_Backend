@@ -3,8 +3,8 @@ import multer from "multer";
 import { ctxOf, requirePermission } from "../middleware/auth.js";
 import { recordAudit } from "../services/auditService.js";
 import { BadRequestError, HttpError, NotFoundError } from "../lib/errors.js";
-import { templateCsv } from "../services/importParsing.js";
-import { runImport, validateImport } from "../services/importService.js";
+import { templateCsv, templateXlsx } from "../services/importParsing.js";
+import { runImport, validateImport, type ImportFile } from "../services/importService.js";
 import { ENTITY_SLUGS, specFor, type EntitySpec } from "../services/importSpec.js";
 
 export const importRouter = Router();
@@ -32,14 +32,25 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
-    const named = file.originalname.toLowerCase().endsWith(".csv");
-    if (!named) {
-      cb(new BadRequestError(`Only .csv files are accepted, got "${file.originalname}"`));
+    const name = file.originalname.toLowerCase();
+    if (!name.endsWith(".csv") && !name.endsWith(".xlsx")) {
+      cb(new BadRequestError(`Only .csv or .xlsx files are accepted, got "${file.originalname}"`));
       return;
     }
     cb(null, true);
   },
 });
+
+/** Picks the parser by filename. Only reached once fileFilter has already approved the extension. */
+function importFileFrom(file: Express.Multer.File | undefined): ImportFile {
+  if (!file) {
+    throw new BadRequestError('No file uploaded. Send the file as multipart form field "file".');
+  }
+  if (file.originalname.toLowerCase().endsWith(".xlsx")) {
+    return { format: "xlsx", buffer: file.buffer };
+  }
+  return { format: "csv", text: file.buffer.toString("utf8") };
+}
 
 /**
  * multer reports its own failures through next(err) with codes rather than
@@ -76,13 +87,6 @@ function requireSpec(raw: string | string[] | undefined): EntitySpec {
   return spec;
 }
 
-function csvTextFrom(file: Express.Multer.File | undefined): string {
-  if (!file) {
-    throw new BadRequestError('No file uploaded. Send the CSV as multipart form field "file".');
-  }
-  return file.buffer.toString("utf8");
-}
-
 /** The column contract itself, useful for a UI building its own hints. */
 importRouter.get("/", canReadContract, (_req, res) => {
   res.json({
@@ -107,9 +111,15 @@ importRouter.get("/", canReadContract, (_req, res) => {
   });
 });
 
-importRouter.get("/:entity/template", canReadContract, (req, res, next) => {
+importRouter.get("/:entity/template", canReadContract, async (req, res, next) => {
   try {
     const spec = requireSpec(req.params.entity);
+    if (req.query.format === "xlsx") {
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="drishti-${spec.slug}-template.xlsx"`);
+      res.send(await templateXlsx(spec));
+      return;
+    }
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="drishti-${spec.slug}-template.csv"`);
     res.send(templateCsv(spec));
@@ -121,7 +131,7 @@ importRouter.get("/:entity/template", canReadContract, (req, res, next) => {
 importRouter.post("/:entity/validate", canImport, uploadCsv, async (req, res, next) => {
   try {
     const spec = requireSpec(req.params.entity);
-    const report = await validateImport(ctxOf(req), spec, csvTextFrom(req.file));
+    const report = await validateImport(ctxOf(req), spec, importFileFrom(req.file));
     // A dry run that found problems is a successful dry run, so this is 200
     // with valid:false rather than an error status.
     res.json({ data: report });
@@ -152,7 +162,7 @@ importRouter.post("/:entity", canImport, uploadCsv, async (req, res, next) => {
       req,
     });
 
-    const result = await runImport(ctx, spec, csvTextFrom(req.file));
+    const result = await runImport(ctx, spec, importFileFrom(req.file));
 
     if (!result.valid) {
       await recordAudit(ctx, {

@@ -46,14 +46,14 @@ ingestRouter.post("/:recordType", validate({ body: ingestBody }), async (req, re
 
   try {
     if (dryRun) {
-      const report = await validateImport(ctx, spec, csvText);
+      const report = await validateImport(ctx, spec, { format: "csv", text: csvText });
       await recordAudit(ctx, { action: "IMPORT_STARTED", entityType: "Import", metadata: { ...common, dryRun: true }, req });
       ok(res, report);
       return;
     }
 
     await recordAudit(ctx, { action: "IMPORT_STARTED", entityType: "Import", metadata: common, req });
-    const result = await runImport(ctx, spec, csvText);
+    const result = await runImport(ctx, spec, { format: "csv", text: csvText });
 
     if (!result.valid) {
       await recordAudit(ctx, {

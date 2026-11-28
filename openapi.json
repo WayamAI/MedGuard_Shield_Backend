@@ -15895,7 +15895,7 @@
         "tags": [
           "Import"
         ],
-        "summary": "Download a CSV template (ADMIN only)",
+        "summary": "Download a CSV or (?format=xlsx) XLSX template (ADMIN only)",
         "security": [
           {
             "sessionCookie": []
@@ -15908,6 +15908,18 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "csv",
+                "xlsx"
+              ]
             }
           }
         ],
@@ -15935,7 +15947,7 @@
         "tags": [
           "Import"
         ],
-        "summary": "Validate a CSV without committing (ADMIN only)",
+        "summary": "Validate a CSV or XLSX upload without committing (ADMIN only)",
         "security": [
           {
             "sessionCookie": []
@@ -16006,7 +16018,7 @@
         "tags": [
           "Import"
         ],
-        "summary": "Import a CSV (ADMIN only)",
+        "summary": "Import a CSV or XLSX upload (ADMIN only)",
         "security": [
           {
             "sessionCookie": []

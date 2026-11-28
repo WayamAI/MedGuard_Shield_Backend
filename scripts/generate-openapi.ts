@@ -121,6 +121,7 @@ type RouteSpec = {
 // existing Zod schema to import for it; same for ingest.ts's :recordType.
 const entityParam = z.object({ entity: z.string() });
 const recordTypeParam = z.object({ recordType: z.string() });
+const templateFormatQuery = z.object({ format: z.enum(["csv", "xlsx"]).optional() });
 
 const ROUTES: RouteSpec[] = [
   { method: "post", path: "/auth/login", tag: "Auth", summary: "Log in (may require a second call with mfaCode)", auth: "public", body: auth.loginBody , response: loginResponseSchema },
@@ -244,9 +245,9 @@ const ROUTES: RouteSpec[] = [
   { method: "get", path: "/reports/risk-assessment.csv", tag: "Reports", summary: "Risk assessment report, top risks (CSV)", auth: "session" },
 
   { method: "get", path: "/import", tag: "Import", summary: "List importable entities (ADMIN only)", auth: "session" , response: importEntityListResponseSchema },
-  { method: "get", path: "/import/{entity}/template", tag: "Import", summary: "Download a CSV template (ADMIN only)", auth: "session", params: entityParam },
-  { method: "post", path: "/import/{entity}/validate", tag: "Import", summary: "Validate a CSV without committing (ADMIN only)", auth: "session", params: entityParam , response: importReportResponseSchema },
-  { method: "post", path: "/import/{entity}", tag: "Import", summary: "Import a CSV (ADMIN only)", auth: "session", params: entityParam , response: importReportResponseSchema },
+  { method: "get", path: "/import/{entity}/template", tag: "Import", summary: "Download a CSV or (?format=xlsx) XLSX template (ADMIN only)", auth: "session", params: entityParam, query: templateFormatQuery },
+  { method: "post", path: "/import/{entity}/validate", tag: "Import", summary: "Validate a CSV or XLSX upload without committing (ADMIN only)", auth: "session", params: entityParam , response: importReportResponseSchema },
+  { method: "post", path: "/import/{entity}", tag: "Import", summary: "Import a CSV or XLSX upload (ADMIN only)", auth: "session", params: entityParam , response: importReportResponseSchema },
 
   { method: "get", path: "/api-keys", tag: "Ingest", summary: "List ingestion API keys (ADMIN only)", auth: "session" , response: apiKeyListResponseSchema },
   { method: "post", path: "/api-keys", tag: "Ingest", summary: "Create an ingestion API key, secret shown once (ADMIN only)", auth: "session" , response: apiKeyCreatedResponseSchema },

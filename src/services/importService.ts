@@ -2,8 +2,11 @@ import { prisma } from "../lib/prisma.js";
 import { BadRequestError } from "../lib/errors.js";
 import { scope, type TenantContext } from "../lib/tenant.js";
 import { computeRisk } from "./riskScoring.js";
-import { parseCsv, type ParsedRow, type RowError } from "./importParsing.js";
+import { parseCsv, parseXlsx, type ParsedRow, type RowError } from "./importParsing.js";
 import type { EntitySpec, RefTarget } from "./importSpec.js";
+
+/** What the route layer hands down: CSV text, or the raw bytes of an xlsx workbook. */
+export type ImportFile = { format: "csv"; text: string } | { format: "xlsx"; buffer: Buffer };
 
 /**
  * The database half of CSV import: everything parseCsv cannot decide on its
@@ -254,9 +257,9 @@ async function analyse(
   db: Db,
   ctx: TenantContext,
   spec: EntitySpec,
-  text: string,
+  file: ImportFile,
 ): Promise<{ report: ImportReport; insertable: Record<string, unknown>[] }> {
-  const parsed = parseCsv(spec, text);
+  const parsed = file.format === "csv" ? parseCsv(spec, file.text) : await parseXlsx(spec, file.buffer);
 
   const empty = (errors: RowError[]): { report: ImportReport; insertable: Record<string, unknown>[] } => ({
     report: { valid: false, totalRows: parsed.totalRows, errors: errors.sort(byRowThenField), preview: [] },
@@ -290,9 +293,9 @@ async function analyse(
 export async function validateImport(
   ctx: TenantContext,
   spec: EntitySpec,
-  text: string,
+  file: ImportFile,
 ): Promise<ImportReport> {
-  const { report } = await analyse(prisma, ctx, spec, text);
+  const { report } = await analyse(prisma, ctx, spec, file);
   return report;
 }
 
@@ -374,10 +377,10 @@ export type ImportResult = ImportReport & { imported: number };
 export async function runImport(
   ctx: TenantContext,
   spec: EntitySpec,
-  text: string,
+  file: ImportFile,
 ): Promise<ImportResult> {
   return prisma.$transaction(async (tx) => {
-    const { report, insertable } = await analyse(tx as unknown as Db, ctx, spec, text);
+    const { report, insertable } = await analyse(tx as unknown as Db, ctx, spec, file);
     if (!report.valid) return { ...report, imported: 0 };
 
     const imported = await insertRows(tx as unknown as Db, ctx, spec, insertable);
